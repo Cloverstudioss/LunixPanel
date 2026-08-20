@@ -64,12 +64,12 @@ export default function serverRoutes(db: Db) {
     return c.json({ data: rows.map((r) => ({ ...r, egg: eggMap.get(r.eggId) ? { id: eggMap.get(r.eggId)!.id, name: eggMap.get(r.eggId)!.name, banner: eggMap.get(r.eggId)!.banner, dockerImage: eggMap.get(r.eggId)!.dockerImage } : null })) });
   });
   app.post('/', requireAdmin, zJson(z.object({
-    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(),
+    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(), allocationLimit: z.number().int().min(0).max(100).default(1),
     memory: z.number().int().min(64).max(1_000_000), swap: z.number().int().min(-1).max(1_000_000).default(0), disk: z.number().int().min(256).max(10_000_000), io: z.number().int().min(10).max(1000).default(500), cpu: z.number().int().min(0).max(10000).default(100),
     threads: z.string().max(191).optional(), oom_disabled: z.boolean().optional(), description: z.string().max(1000).optional(),
     image: z.string().min(1).max(512), startup: z.string().max(2048).default(''), expires_at: z.string().datetime().nullable().optional(), env: z.record(z.string()).default({}),
   })), async (c) => {
-    const b = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
+    const b = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
     const alloc = await db.select().from(schema.allocations).where(eq(schema.allocations.id, b.allocationId)).limit(1);
     if (!alloc[0] || alloc[0].nodeId !== b.nodeId) return c.json({ errors: [{ code: 'validation', detail: 'Allocation does not belong to node' }] }, 422);
     if (alloc[0].serverId) return c.json({ errors: [{ code: 'conflict', detail: 'Allocation already in use' }] }, 409);
@@ -218,6 +218,23 @@ export default function serverRoutes(db: Db) {
     if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
     return c.json({ data: { ok: true } });
   });
+  app.get('/:id/logs', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    try {
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/logs`, { headers: { Authorization: `Bearer ${node.daemonToken}` } });
+      if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+      const j = await r.json().catch(() => ({ data: [] }));
+      return c.json({ data: j.data || [] });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+    }
+  });
   const fileProxy = (name: string) => async (c: any) => {
     const id = parseInt(c.req.param('id') || '0', 10);
     const s = await loadServer(id);
@@ -295,24 +312,27 @@ export default function serverRoutes(db: Db) {
     const all = await db.select().from(schema.allocations).where(eq(schema.allocations.nodeId, node.id));
     const mine = all.filter((a) => a.serverId === id).sort((a, b) => (a.id === s.allocationId ? -1 : 0) - (b.id === s.allocationId ? -1 : 0));
     const free = all.filter((a) => !a.serverId);
-    return c.json({ data: { primary_id: s.allocationId, assigned: mine, free } });
+    const limit = s.allocationLimit;
+    const canAdd = limit === 0 || mine.length < limit;
+    return c.json({ data: { primary_id: s.allocationId, assigned: mine, limit, can_add: canAdd, free_count: free.length } });
   });
-  app.post('/:id/allocations', requireAuth, zJson(z.object({ allocation_id: z.number().int() })), async (c) => {
+  app.post('/:id/allocations', requireAuth, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
     const s = await loadServer(id);
     if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
     const auth = await requireOwner(c as never, s);
     if ('res' in auth) return auth.res;
-    const b = c.req.valid('json' as never) as { allocation_id: number };
     const node = await nodeFor(s);
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
-    const allocs = await db.select().from(schema.allocations).where(eq(schema.allocations.id, b.allocation_id)).limit(1);
-    const a = allocs[0];
-    if (!a || a.nodeId !== node.id) return c.json({ errors: [{ code: 'validation', detail: 'Allocation not on this node' }] }, 422);
-    if (a.serverId) return c.json({ errors: [{ code: 'conflict', detail: 'Allocation already in use' }] }, 409);
-    await db.update(schema.allocations).set({ serverId: id }).where(eq(schema.allocations.id, b.allocation_id));
+    const all = await db.select().from(schema.allocations).where(eq(schema.allocations.nodeId, node.id));
+    const mine = all.filter((a) => a.serverId === id);
+    const free = all.filter((a) => !a.serverId);
+    if (s.allocationLimit !== 0 && mine.length >= s.allocationLimit) return c.json({ errors: [{ code: 'limit', detail: `Allocation limit reached (${s.allocationLimit}).` }] }, 409);
+    if (free.length === 0) return c.json({ errors: [{ code: 'no_free', detail: 'No free allocations on this node.' }] }, 409);
+    const pick = free[Math.floor(Math.random() * free.length)];
+    await db.update(schema.allocations).set({ serverId: id }).where(eq(schema.allocations.id, pick.id));
     await syncToWings(s);
-    return c.json({ data: { ok: true } }, 201);
+    return c.json({ data: { ok: true, allocation: { id: pick.id, ip: pick.ip, port: pick.port, alias: pick.ipAlias } } }, 201);
   });
   app.delete('/:id/allocations/:aid', requireAuth, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);

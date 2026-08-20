@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FiGrid, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase } from 'react-icons/fi';
+import { FiGrid, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase, FiMoreVertical, FiCheckSquare, FiArchive, FiRefreshCw } from 'react-icons/fi';
 import { QyroMark } from './QyroBrand';
 import './styles.css';
 
@@ -362,12 +362,12 @@ function RequestAccessPage() {
 
 function ServerCard({ s }: { s: { id: number; name: string; status: string; memory: number; disk: number; image?: string; egg?: { banner?: string | null; name?: string } | null } }) {
   const running = s.status === 'running';
-  const img = (s.image || '').split('/').pop()?.split(':')[0] || s.egg?.name || 'server';
+  const img = s.egg?.name || (s.image || '').split('/').pop()?.split(':')[0] || 'server';
   const banner = s.egg?.banner || null;
   return (
-    <NavLink to={`/server/${s.id}`} className="server-card" style={{ textDecoration: 'none', color: 'inherit' }}>
-      <div className="server-card-banner" style={banner ? { backgroundImage: `url("${banner}")` } : undefined}>
-        {banner && <div className="server-card-banner-overlay" />}
+    <NavLink to={`/server/${s.id}`} className={`server-card${banner ? ' has-banner' : ''}`} style={{ textDecoration: 'none', color: 'inherit', ...(banner ? { backgroundImage: `url("${banner}")` } : {}) }}>
+      {banner && <div className="server-card-banner-overlay" style={{ display: 'none' }} />}
+      <div className="server-card-banner">
         <div className="server-card-icon"><FiBox size={20} /></div>
         <span className={`badge badge-${s.status}`} style={{ marginLeft: 'auto' }}>{s.status}</span>
       </div>
@@ -528,6 +528,9 @@ function ConsoleTab({ id }: { id: number }) {
     let closed = false;
     (async () => {
       try {
+        const logs = await fetch(`/api/servers/${id}/logs`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data || []).catch(() => []);
+        if (closed) return;
+        if (Array.isArray(logs) && logs.length > 0) setLines(logs.slice(-200).map((t: string) => ({ text: String(t), key: lineKey.current++ })));
         const r = await fetch(`/api/servers/${id}/websocket`, { method: 'POST', credentials: 'include' });
         const j = await r.json();
         if (!r.ok || !j.data) { if (!closed) setStatus('error'); return; }
@@ -619,43 +622,53 @@ function FilesTab({ id }: { id: number }) {
   const [newFile, setNewFile] = React.useState('');
   const [showNewFolder, setShowNewFolder] = React.useState(false);
   const [showNewFile, setShowNewFile] = React.useState(false);
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [menu, setMenu] = React.useState<string | null>(null);
+  const [archiving, setArchiving] = React.useState(false);
   const load = React.useCallback(() => {
     setLoading(true);
     fetch(`/api/servers/${id}/files?directory=${encodeURIComponent(dir)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => setFiles(j.data || [])).catch(() => setFiles([])).finally(() => setLoading(false));
   }, [id, dir]);
   React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { setSelected(new Set()); }, [dir]);
   const parts = dir.split('/').filter(Boolean);
+  const BINARY_EXT = /\.(jar|zip|gz|tar|exe|dll|so|o|a|bin|class|png|jpe?g|gif|webp|ico|mp3|mp4|ogg|wav|woff2?|ttf|eot|dat|sav|world|regions)$/i;
+  const isArchive = (name: string) => /\.(zip|tar\.gz|tgz|tar)$/i.test(name);
   async function api(path: string, method: string, body?: unknown) {
     const r = await fetch(`/api/servers/${id}/files${path}`, { method, credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); setMsg(j.errors?.[0]?.detail || 'Failed'); return false; }
-    setMsg(''); return true;
+    if (!r.ok) { const j = await r.json().catch(() => ({})); setMsg(j.errors?.[0]?.detail || 'Failed'); return null as unknown as Response; }
+    setMsg(''); return r;
+  }
+  function pathOf(name: string) { return dir === '/' ? `/${name}` : `${dir}/${name}`; }
+  function toggle(name: string) {
+    setSelected((p) => { const n = new Set(p); if (n.has(name)) n.delete(name); else n.add(name); return n; });
   }
   function open(item: { name: string; directory: boolean }) {
     if (item.directory) setDir((d) => (d === '/' ? `/${item.name}` : `${d}/${item.name}`));
+    else if (BINARY_EXT.test(item.name)) setMsg(`${item.name} is a binary file and cannot be opened in the editor.`);
     else fetchContent(item.name);
   }
   function fmt(n: number) { if (!n) return '0 B'; if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`; return `${(n / 1048576).toFixed(1)} MB`; }
   async function fetchContent(name: string) {
-    const r = await fetch(`/api/servers/${id}/files/contents?file=${encodeURIComponent(dir === '/' ? `/${name}` : `${dir}/${name}`)}`, { credentials: 'include' });
+    const r = await fetch(`/api/servers/${id}/files/contents?file=${encodeURIComponent(pathOf(name))}`, { credentials: 'include' });
     if (!r.ok) return;
     const text = await r.text();
-    setEdit({ path: dir === '/' ? `/${name}` : `${dir}/${name}`, content: text });
+    setEdit({ path: pathOf(name), content: text });
   }
   async function saveFile() {
     if (!edit) return;
     if (await api(`/write?file=${encodeURIComponent(edit.path)}`, 'POST', edit.content)) setEdit(null);
   }
-  async function del(name: string) {
-    const p = dir === '/' ? `/${name}` : `${dir}/${name}`;
-    if (!confirm(`Delete ${p}?`)) return;
-    if (await api('/delete', 'POST', { root: '/', files: [p] })) load();
+  async function del(names: string[]) {
+    const list = names.map((n) => pathOf(n));
+    if (!confirm(`Delete ${list.length} ${list.length === 1 ? 'item' : 'items'}?`)) return;
+    if (await api('/delete', 'POST', { root: '/', files: list })) { setSelected(new Set()); load(); }
   }
   async function rename(name: string) {
     const to = prompt(`Rename ${name} to:`, name);
     if (!to || to === name) return;
-    const p = dir === '/' ? `/${name}` : `${dir}/${name}`;
-    const np = dir === '/' ? `/${to}` : `${dir}/${to}`;
-    if (await api('/rename', 'POST', { root: '/', files: [{ from: p, to: np }] })) load();
+    const np = pathOf(to);
+    if (await api('/rename', 'POST', { root: '/', files: [{ from: pathOf(name), to: np }] })) load();
   }
   async function makeFolder(e: React.FormEvent) {
     e.preventDefault(); if (!newFolder) return;
@@ -663,9 +676,32 @@ function FilesTab({ id }: { id: number }) {
   }
   async function makeFile(e: React.FormEvent) {
     e.preventDefault(); if (!newFile) return;
-    const p = dir === '/' ? `/${newFile}` : `${dir}/${newFile}`;
-    if (await api('/write?file=' + encodeURIComponent(p), 'POST', '')) { setNewFile(''); setShowNewFile(false); load(); }
+    if (await api('/write?file=' + encodeURIComponent(pathOf(newFile)), 'POST', '')) { setNewFile(''); setShowNewFile(false); load(); }
   }
+  async function archive() {
+    const list = Array.from(selected).map((n) => pathOf(n));
+    if (list.length === 0) return;
+    setArchiving(true);
+    try {
+      const r = await fetch(`/api/servers/${id}/files/compress`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root: '/', files: list }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(j.errors?.[0]?.detail || 'Archive failed'); return; }
+      setMsg(`Archived as ${j.data?.name || 'archive.tar.gz'}.`);
+      setSelected(new Set());
+      load();
+    } finally { setArchiving(false); }
+  }
+  async function unarchive(name: string) {
+    setArchiving(true);
+    try {
+      const r = await fetch(`/api/servers/${id}/files/decompress`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root: '/', file: pathOf(name) }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(j.errors?.[0]?.detail || 'Extract failed'); return; }
+      setMsg(`Extracted ${name}.`);
+      load();
+    } finally { setArchiving(false); }
+  }
+  const selCount = selected.size;
   return (
     <div className="stack">
       {msg && <div className="alert alert-error">{msg}</div>}
@@ -673,6 +709,14 @@ function FilesTab({ id }: { id: number }) {
         <button onClick={() => setDir('/')}>/</button>
         {parts.map((p, i) => <span key={i} style={{ display: 'inline-flex', alignItems: 'center' }}><span className="sep">/</span><button onClick={() => setDir('/' + parts.slice(0, i + 1).join('/'))}>{p}</button></span>)}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+          {selCount > 0 && (
+            <>
+              <span className="badge badge-active" style={{ alignSelf: 'center' }}>{selCount} selected</span>
+              <button className="btn btn-ghost btn-sm" onClick={archive} disabled={archiving}><FiArchive size={12} /> Archive</button>
+              <button className="btn btn-ghost btn-sm" style={{ color: '#f87171' }} onClick={() => del(Array.from(selected))}><FiTrash2 size={12} /> Delete</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}><FiX size={12} /> Clear</button>
+            </>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={() => { setShowNewFolder(true); }}><FiPlus size={12} /> Folder</button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setShowNewFile(true); }}><FiPlus size={12} /> File</button>
         </span>
@@ -691,18 +735,28 @@ function FilesTab({ id }: { id: number }) {
       )}
       {loading ? <Skeleton lines={4} /> : files.length === 0 ? <div className="transparent-card"><div className="transparent-card-title">Empty directory</div></div> : (
         <div className="table-wrap"><table className="table file-table">
-          <thead><tr><th style={{ width: 40 }}></th><th>Name</th><th style={{ width: 90 }}>Size</th><th style={{ width: 150 }}>Modified</th><th style={{ width: 130 }} className="right">Actions</th></tr></thead>
+          <thead><tr>
+            <th style={{ width: 34 }}><input type="checkbox" checked={selCount === files.length && files.length > 0} onChange={(e) => { if (e.target.checked) setSelected(new Set(files.map((f) => f.name))); else setSelected(new Set()); }} /></th>
+            <th>Name</th><th style={{ width: 90 }}>Size</th><th style={{ width: 150 }}>Modified</th><th style={{ width: 110 }} className="right">Actions</th>
+          </tr></thead>
           <tbody>
             {files.map((f) => (
-              <tr key={f.name} className="file-row" onClick={() => open(f)}>
-                <td>{f.directory ? <FiFolder size={14} style={{ color: '#f59e0b', flexShrink: 0, verticalAlign: 'middle' }} /> : <FiFile size={14} style={{ color: 'var(--muted-2)', flexShrink: 0, verticalAlign: 'middle' }} />}</td>
-                <td className="fname" title={f.name}>{f.name}</td>
+              <tr key={f.name} className={`file-row${selected.has(f.name) ? ' file-row-selected' : ''}`} onClick={() => open(f)}>
+                <td className="checkbox" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(f.name)} onChange={() => toggle(f.name)} /></td>
+                <td className="fname" title={f.name}><span className="fname-inner">{f.directory ? <FiFolder size={14} style={{ color: '#f59e0b', flexShrink: 0 }} /> : <FiFile size={14} style={{ color: 'var(--muted-2)', flexShrink: 0 }} />}<span className="fname-text">{f.name}</span></span></td>
                 <td className="mono muted" style={{ fontSize: 12 }}>{f.directory ? '—' : fmt(f.size)}</td>
                 <td className="mono muted" style={{ fontSize: 11 }}>{f.modified ? new Date(f.modified).toLocaleString() : '—'}</td>
-                <td className="right" style={{ whiteSpace: 'nowrap' }}>
-                  {!f.directory && <button className="btn btn-ghost btn-sm" style={{ padding: 2 }} title="Download" onClick={(e) => { e.stopPropagation(); window.open(`/api/servers/${id}/files/download?file=${encodeURIComponent(dir === '/' ? `/${f.name}` : `${dir}/${f.name}`)}`, '_blank'); }}><FiDownload size={11} /></button>}
-                  <button className="btn btn-ghost btn-sm" style={{ padding: 2 }} title="Rename" onClick={(e) => { e.stopPropagation(); rename(f.name); }}>Rename</button>
-                  <button className="btn btn-ghost btn-sm" style={{ padding: 2, color: '#f87171' }} title="Delete" onClick={(e) => { e.stopPropagation(); del(f.name); }}><FiTrash2 size={11} /></button>
+                <td className="right" style={{ whiteSpace: 'nowrap', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                  {isArchive(f.name) && !f.directory && <button className="btn btn-ghost btn-sm" style={{ padding: 4 }} title="Extract" onClick={() => unarchive(f.name)} disabled={archiving}><FiRefreshCw size={11} /></button>}
+                  {!f.directory && <button className="btn btn-ghost btn-sm" style={{ padding: 4 }} title="Download" onClick={() => window.open(`/api/servers/${id}/files/download?file=${encodeURIComponent(pathOf(f.name))}`, '_blank')}><FiDownload size={11} /></button>}
+                  <button className="btn btn-ghost btn-sm" style={{ padding: 4 }} title="More" onClick={() => setMenu(menu === f.name ? null : f.name)}><FiMoreVertical size={11} /></button>
+                  {menu === f.name && (
+                    <div className="file-menu" onClick={() => setMenu(null)}>
+                      <button onClick={() => rename(f.name)}>Rename</button>
+                      {!f.directory && <button onClick={() => window.open(`/api/servers/${id}/files/download?file=${encodeURIComponent(pathOf(f.name))}`, '_blank')}>Download</button>}
+                      <button style={{ color: '#f87171' }} onClick={() => del([f.name])}>Delete</button>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

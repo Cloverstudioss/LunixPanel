@@ -18,15 +18,15 @@ function getConfigStr(cfg: Record<string, unknown> | null | undefined, key: stri
   return typeof v === 'object' ? (v as Record<string, unknown>) : {};
 }
 
-function envVarsFor(s: { uuid: string; uuidShort: string; startup: string }, locationShort: string | null, vars: { envVariable: string; value: string }[]): Record<string, string> {
+function envVarsFor(s: { uuid: string; uuidShort: string; startup: string; allocationLimit: number; backupLimit: number }, locationShort: string | null, vars: { envVariable: string; value: string }[]): Record<string, string> {
   const env: Record<string, string> = {};
   for (const v of vars) env[v.envVariable] = v.value;
   env['STARTUP'] = s.startup;
   env['P_SERVER_UUID'] = s.uuid;
   env['P_SERVER_LOCATION'] = locationShort || 'global';
-  env['P_SERVER_ALLOCATION_LIMIT'] = '1';
+  env['P_SERVER_ALLOCATION_LIMIT'] = String(s.allocationLimit);
   env['P_SERVER_DATABASE_LIMIT'] = '0';
-  env['P_SERVER_BACKUP_LIMIT'] = '0';
+  env['P_SERVER_BACKUP_LIMIT'] = String(s.backupLimit);
   return env;
 }
 

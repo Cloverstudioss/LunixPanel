@@ -120,17 +120,22 @@ button,input,textarea,select{font:inherit}
 
 .transparent-card{padding:22px 18px;border-radius:14px;background:transparent;border:1px dashed rgba(255,255,255,0.10);display:grid;gap:6px;min-height:96px;place-content:center;text-align:center}
 .transparent-card-title{font-weight:650;font-size:13px;color:var(--muted)}
-.server-card{padding:10px;border-radius:14px;background:var(--surface);border:1px solid rgba(255,255,255,0.08);display:grid;gap:8px;transition:border-color 140ms ease, transform 140ms ease;overflow:hidden}
+.server-card{padding:12px;border-radius:14px;background:var(--surface);border:1px solid rgba(255,255,255,0.08);display:grid;gap:10px;transition:border-color 140ms ease, transform 140ms ease;overflow:hidden;position:relative;background-size:cover;background-position:center;background-clip:padding-box}
 .server-card:hover{border-color:rgba(255,255,255,0.16);transform:translateY(-1px)}
-.server-card-banner{position:relative;height:96px;border-radius:10px;background:linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.015)), var(--bg-soft);background-size:cover;background-position:center;display:flex;align-items:flex-start;padding:10px;gap:8px;overflow:hidden}
-.server-card-banner-overlay{position:absolute;inset:0;background:linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.28) 45%, rgba(0,0,0,0) 100%)}
+.server-card.has-banner{border-color:rgba(255,255,255,0.22);box-shadow:inset 0 0 0 1px rgba(0,0,0,0.55)}
+.server-card.has-banner::before{content:'';position:absolute;inset:0;background:linear-gradient(to bottom, rgba(10,12,16,0.05) 0%, rgba(10,12,16,0.25) 35%, rgba(10,12,16,0.7) 70%, rgba(10,12,16,0.95) 100%);z-index:1;pointer-events:none}
+.server-card.has-banner > *{position:relative;z-index:2}
+.server-card-banner{position:relative;display:flex;align-items:flex-start;gap:8px;min-height:64px}
 .server-card-banner > *{position:relative}
 .server-card-icon{width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.18);display:grid;place-items:center;color:#fff;backdrop-filter:blur(6px)}
-.server-card-body{display:grid;gap:8px;padding:2px 2px 4px}
-.server-card-title{font-weight:700;font-size:15px;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.server-card-img{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.server-card-stats{display:flex;gap:14px;padding-top:8px;border-top:1px solid var(--line)}
-.stat{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;font-weight:550}
+.server-card-body{display:grid;gap:8px;padding:2px 2px 4px;margin-top:auto}
+.server-card-title{font-weight:700;font-size:16px;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}
+.server-card.has-banner .server-card-title{text-shadow:0 1px 3px rgba(0,0,0,0.75), 0 0 8px rgba(0,0,0,0.4)}
+.server-card-img{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}
+.server-card.has-banner .server-card-img{opacity:0.9;text-shadow:0 1px 2px rgba(0,0,0,0.7)}
+.server-card-stats{display:flex;gap:14px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.25)}
+.stat{display:inline-flex;align-items:center;gap:5px;color:#fff;font-size:11.5px;font-weight:550}
+.server-card.has-banner .stat{text-shadow:0 1px 2px rgba(0,0,0,0.75)}
 .pulse-dot{width:7px;height:7px;border-radius:999px;background:#374151}
 .pulse-dot.on{background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,0.5);animation:pulseRing 1.6s ease-out infinite}
 .pulse-dot.off{background:#6b7280}
@@ -215,10 +220,20 @@ button,input,textarea,select{font:inherit}
 .file-breadcrumb .sep{color:var(--muted-2);opacity:0.5}
 .file-table .file-row{cursor:pointer}
 .file-table .file-row:hover td{background:rgba(255,255,255,0.03)}
+.file-table .file-row-selected td{background:rgba(59,130,246,0.08)!important}
+.file-table .file-row-selected .fname{color:#93c5fd}
 .file-table td.right, .file-table th.right{text-align:right}
-.file-table .fname{max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-table .fname{width:100%;min-width:0;overflow:hidden}
+.file-table .fname-inner{display:flex;align-items:center;gap:8px;min-width:0}
+.file-table .fname-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .file-table td .btn{visibility:hidden;opacity:0;transition:opacity 120ms ease}
 .file-table tr:hover td .btn{visibility:visible;opacity:1}
+.file-table input[type=checkbox]{accent-color:#3b82f6;width:14px;height:14px;cursor:pointer;vertical-align:middle}
+.file-table td.checkbox{width:34px;padding-left:10px}
+.file-table td:first-child{padding-right:0}
+.file-menu{position:absolute;right:8px;top:calc(100% - 4px);z-index:30;min-width:150px;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,0.5);padding:4px;display:grid;gap:2px}
+.file-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;color:var(--text);font-family:inherit;font-size:12.5px;font-weight:500;padding:7px 10px;border-radius:7px;cursor:pointer}
+.file-menu button:hover{background:var(--bg-soft)}
 .file-table td .btn:focus{visibility:visible;opacity:1}
 
 .var-row{display:flex;flex-direction:column;gap:4px;padding:12px 0;border-bottom:1px solid var(--line)}

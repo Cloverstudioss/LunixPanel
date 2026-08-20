@@ -131,6 +131,8 @@ export const servers = pgTable('servers', {
   nodeId: integer('node_id').notNull().references(() => nodes.id),
   eggId: integer('egg_id').notNull().references(() => eggs.id),
   allocationId: integer('allocation_id').notNull().references(() => allocations.id),
+  allocationLimit: integer('allocation_limit').notNull().default(1),
+  backupLimit: integer('backup_limit').notNull().default(0),
   memory: integer('memory').notNull().default(512),
   swap: integer('swap').notNull().default(0),
   disk: integer('disk').notNull().default(10240),
@@ -152,6 +154,17 @@ export const serverVariables = pgTable('server_variables', {
   variableId: integer('variable_id').notNull().references(() => eggVariables.id, { onDelete: 'cascade' }),
   variableValue: text('variable_value').notNull().default(''),
 });
+
+export const backups = pgTable('backups', {
+  id: serial('id').primaryKey(),
+  uuid: uuid('uuid').notNull().unique().$defaultFn(() => crypto.randomUUID()),
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 191 }).notNull(),
+  size: bigint('size', { mode: 'number' }).notNull().default(0),
+  status: varchar('status', { length: 20 }).notNull().default('running'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, (t) => [index('backups_server_idx').on(t.serverId)]);
 
 export const proxmoxClusters = pgTable('proxmox_clusters', {
   id: serial('id').primaryKey(),
