@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.drizzle
+.turbo
+vite/dist
+apps/web/dist
+.commandcode/settings.json

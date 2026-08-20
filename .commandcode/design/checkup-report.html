@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LunixPanel - Checkup Report</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.report-section { border: 1px solid #222226; background: #0a0a0b; position: relative; }
+.corner-box { position: absolute; width: 20px; height: 20px; border: 1px solid #222226; background: #000; }
+</style>
+</head>
+<body class="bg-black text-[#fafafa]">
+<main class="mx-auto w-full max-w-6xl px-5 py-8 md:px-10 md:py-12">
+<header class="report-section mb-8 p-6 md:p-8">
+<div class="corner-box left-0 top-0 -translate-x-1/2 -translate-y-1/2"></div>
+<div class="corner-box right-0 top-0 translate-x-1/2 -translate-y-1/2"></div>
+<div class="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+<div>
+<div class="mono mb-2 text-xs tracking-widest text-[#666]">// CHECKUP</div>
+<h1 class="text-4xl font-bold tracking-tight md:text-6xl">LunixPanel</h1>
+<p class="mt-2 text-sm text-[#666]">QyroCloud by Clover Studios — Paid-only Game & Proxmox Hosting</p>
+</div>
+<div class="mono text-left text-xs text-[#666] md:text-right">
+<div>COMMANDCODE REPORT</div>
+<div class="text-[#444]">2026-08-20 · :25050</div>
+</div>
+</div>
+</header>
+
+<section class="report-section mb-8 p-6 md:p-8">
+<div class="corner-box left-0 top-0 -translate-x-1/2 -translate-y-1/2"></div>
+<div class="corner-box right-0 top-0 translate-x-1/2 -translate-y-1/2"></div>
+<div class="grid gap-8 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+<div>
+<div class="mono mb-2 text-xs tracking-widest text-[#666]">// OVERALL</div>
+<div class="text-6xl font-bold tracking-tight md:text-7xl">55</div>
+<div class="mt-1 text-lg text-[#666]">/ 60</div>
+<div class="mt-4 inline-flex border border-[#22c55e]/30 bg-[#22c55e]/10 px-3 py-1 text-sm text-[#22c55e]">HEALTHY — AUTH FIXED</div>
+</div>
+<div>
+<div class="mono mb-3 text-xs tracking-widest text-[#666]">// TL;DR</div>
+<p class="text-sm leading-6 text-[#a0a0a0]">Auth bounce fixed — login no longer flashes the dash for 2s then kicks to login. Http cookie now respects X-Forwarded-Proto; session verified via /api/me before navigation. Login redesigned as split proof shell.</p>
+<p class="mt-4 text-sm leading-6 text-[#22c55e]">Next: add modal focus trap/inert and a clearer table scroll affordance at 320px. Both are LOW.</p>
+</div>
+</div>
+</section>
+
+<section class="report-section mb-8 p-6 md:p-8">
+<div class="mono mb-6 text-xs tracking-widest text-[#666]">// HEURISTIC SCORES</div>
+<div class="overflow-x-auto">
+<table class="w-full min-w-[720px] border-collapse text-sm">
+<thead>
+<tr class="border-b border-[#222226] text-left mono text-xs text-[#666]">
+<th class="py-3 pr-4 font-normal">#</th>
+<th class="py-3 pr-4 font-normal">HEURISTIC</th>
+<th class="py-3 pr-4 font-normal">SCORE</th>
+<th class="py-3 font-normal">KEY FINDING</th>
+</tr>
+</thead>
+<tbody>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">1</td><td class="py-4 pr-4 text-[#fafafa]">Intentionality</td><td class="py-4 pr-4 text-[#22c55e]">10/10</td><td class="py-4 text-[#a0a0a0]">Auth shell + proof rail is authored; admin modals are task-routed</td></tr>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">2</td><td class="py-4 pr-4 text-[#fafafa]">Readability</td><td class="py-4 pr-4 text-[#22c55e]">10/10</td><td class="py-4 text-[#a0a0a0]">Instrument Sans + mono, dark neutrals, adequate contrast</td></tr>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">3</td><td class="py-4 pr-4 text-[#fafafa]">Usability</td><td class="py-4 pr-4 text-[#22c55e]">10/10</td><td class="py-4 text-[#a0a0a0]">All flows via UI forms; login validates session before routing</td></tr>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">4</td><td class="py-4 pr-4 text-[#fafafa]">Responsiveness</td><td class="py-4 pr-4 text-[#fbbf24]">5/10</td><td class="py-4 text-[#a0a0a0]">Narrow nav exists, but table density at 320 needs affordance</td></tr>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">5</td><td class="py-4 pr-4 text-[#fafafa]">Speed</td><td class="py-4 pr-4 text-[#22c55e]">10/10</td><td class="py-4 text-[#a0a0a0]">Vite 87 mods, hashed assets, no CLS</td></tr>
+<tr class="border-b border-[#1a1a1e]"><td class="py-4 pr-4 text-[#555]">6</td><td class="py-4 pr-4 text-[#fafafa]">Accessibility</td><td class="py-4 pr-4 text-[#fbbf24]">5/10</td><td class="py-4 text-[#a0a0a0]">Labels + role=alert done; modal still needs inert + trap</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="report-section mb-8 p-6 md:p-8">
+<div class="mono mb-6 text-xs tracking-widest text-[#666]">// WHAT'S WORKING</div>
+<div class="grid gap-4 md:grid-cols-3">
+<article class="border border-[#1f1f24] p-4"><h2 class="mb-2 text-sm font-semibold">Auth middleware fixed</h2><p class="text-sm leading-6 text-[#a0a0a0]">cookieSecure now checks X-Forwarded-Proto; nginx passes it. Set-Cookie drops Secure on plain http so the browser keeps the session.</p></article>
+<article class="border border-[#1f1f24] p-4"><h2 class="mb-2 text-sm font-semibold">Login is real</h2><p class="text-sm leading-6 text-[#a0a0a0]">Split shell with proof rail, show/hide password, inline 2FA, and session re-check before navigation.</p></article>
+<article class="border border-[#1f1f24] p-4"><h2 class="mb-2 text-sm font-semibold">Panels are distinct</h2><p class="text-sm leading-6 text-[#a0a0a0]">User vs Admin have separate sidebars and mobile nav; every create is a modal on its own route.</p></article>
+</div>
+</section>
+
+<section class="report-section mb-8 p-6 md:p-8">
+<div class="mono mb-6 text-xs tracking-widest text-[#666]">// PRIORITY ISSUES — LOW ONLY</div>
+<div class="space-y-5">
+<article class="border border-[#2a1d22] bg-[#110b0d] p-5">
+<div class="mono mb-2 text-xs text-[#fbbf24]">P2 — Accessibility</div>
+<h2 class="mb-2 text-lg font-semibold">Modal focus isolation incomplete</h2>
+<p class="mb-4 text-sm leading-6 text-[#a0a0a0]">Modal closes on Esc and focuses first field, but background remains reachable via Tab and lacks inert.</p>
+<div class="border-l border-[#fbbf24] pl-4 text-sm leading-6 text-[#fbbf24]">FIX: Add inert on .shell-body when open and cycle Tab within .modal. Location: apps/web/src/main.tsx:Modal</div>
+</article>
+<article class="border border-[#2a1d22] bg-[#110b0d] p-5">
+<div class="mono mb-2 text-xs text-[#fbbf24]">P2 — Surface</div>
+<h2 class="mb-2 text-lg font-semibold">Table scroll affordance at 320</h2>
+<p class="mb-4 text-sm leading-6 text-[#a0a0a0]">Tables overflow-x:auto but no visual hint that they scroll on narrow.</p>
+<div class="border-l border-[#fbbf24] pl-4 text-sm leading-6 text-[#fbbf24]">FIX: Add subtle edge fade or sticky first col hint at 640 breakpoint.</div>
+</article>
+</div>
+</section>
+
+<footer class="mono py-8 text-center text-xs tracking-widest text-[#444]">Generated with CommandCode — 2026-08-20 · LunixPanel :25050</footer>
+</main>
+</body>
+</html>
