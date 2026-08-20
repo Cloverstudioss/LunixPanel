@@ -186,7 +186,7 @@ export default function nodeRoutes(db: Db) {
     if (servers[0]) return c.json({ errors: [{ code: 'conflict', detail: 'Cannot delete node with servers. Move or delete servers first.' }] }, 409);
     await db.delete(schema.allocations).where(eq(schema.allocations.nodeId, id));
     await db.delete(schema.nodes).where(eq(schema.nodes.id, id));
-    const { audit, auditIp } = await import('../lib/audit.js');
+    const { audit, auditIp } = await import('../../lib/audit.js');
     await audit(db, me.id, 'node.deleted', 'node', String(id), auditIp(c), { fqdn: rows[0].fqdn });
     return c.json({ data: { ok: true } });
   });

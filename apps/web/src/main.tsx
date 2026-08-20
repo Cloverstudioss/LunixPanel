@@ -9,7 +9,7 @@ import './styles.css';
 const qc = new QueryClient();
 const BRAND = { panel: 'LunixPanel', vendor: 'QyroCloud', studio: 'Clover Studios' };
 
-type Me = { email: string; username: string; isAdmin: boolean; status: string; expiresAt: string | null; graceUntil: string | null } | null;
+type Me = { id: number; email: string; username: string; isAdmin: boolean; status: string; expiresAt: string | null; graceUntil: string | null } | null;
 
 const AuthCtx = React.createContext<{ me: Me; loading: boolean; refresh: () => Promise<void> }>({ me: null, loading: true, refresh: async () => {} });
 
@@ -71,13 +71,59 @@ function Topbar({ me, onLogout }: { me: Me; onLogout: () => void }) {
   );
 }
 
+const ToastCtx = React.createContext<{ show: (msg: string) => void } | null>(null);
+function useToast() { return React.useContext(ToastCtx); }
+function ToastProvider({ children }: { children: React.ReactNode }) {
+  const [msg, setMsg] = React.useState<string | null>(null);
+  const timer = React.useRef<number | null>(null);
+  const show = React.useCallback((m: string) => {
+    setMsg(m);
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setMsg(null), 2200);
+  }, []);
+  return (
+    <ToastCtx.Provider value={{ show }}>
+      {children}
+      <div className={`toast-wrap${msg ? ' show' : ''}`} aria-live="polite">
+        {msg && <div className="toast"><FiCopy size={13} /> {msg}</div>}
+      </div>
+    </ToastCtx.Provider>
+  );
+}
+
 function CopyBtn({ text, label = 'Copy' }: { text: string; label?: string }) {
   const [done, setDone] = React.useState(false);
+  const toast = React.useContext(ToastCtx);
   const onCopy = async () => {
     try { await navigator.clipboard.writeText(text); } catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    setDone(true); setTimeout(() => setDone(false), 1400);
+    setDone(true); toast?.show(text.includes(':') ? `Copied ${text}` : 'Copied to clipboard'); setTimeout(() => setDone(false), 1400);
   };
   return <button className="btn btn-ghost btn-sm" onClick={onCopy}><FiCopy size={13} /> {done ? 'Copied' : label}</button>;
+}
+
+type ConfirmOpts = { title?: string; message: string; confirmLabel?: string; danger?: boolean };
+type PromptOpts = { title?: string; message: string; defaultValue?: string; placeholder?: string; confirmLabel?: string };
+const ConfirmCtx = React.createContext<{ confirm: (opts: ConfirmOpts) => Promise<boolean>; prompt: (opts: PromptOpts) => Promise<string | null> } | null>(null);
+function useConfirm() { return React.useContext(ConfirmCtx)!; }
+function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const [c, setC] = React.useState<(ConfirmOpts & { resolve: (v: boolean) => void }) | null>(null);
+  const [p, setP] = React.useState<(PromptOpts & { resolve: (v: string | null) => void; draft: string }) | null>(null);
+  const confirm = React.useCallback((opts: ConfirmOpts) => new Promise<boolean>((resolve) => setC({ ...opts, resolve })), []);
+  const prompt = React.useCallback((opts: PromptOpts) => new Promise<string | null>((resolve) => setP({ ...opts, resolve, draft: opts.defaultValue ?? '' })), []);
+  return (
+    <ConfirmCtx.Provider value={{ confirm, prompt }}>
+      {children}
+      <Modal open={!!c} onClose={() => { c?.resolve(false); setC(null); }} title={c?.title || 'Confirm'} footer={<><button className="btn btn-ghost" onClick={() => { c?.resolve(false); setC(null); }}>Cancel</button><button className={c?.danger ? 'btn btn-danger' : 'btn btn-primary'} onClick={() => { c?.resolve(true); setC(null); }}>{c?.confirmLabel || 'Confirm'}</button></>}>
+        <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>{c?.message}</p>
+      </Modal>
+      <Modal open={!!p} onClose={() => { p?.resolve(null); setP(null); }} title={p?.title || 'Enter value'} footer={<><button className="btn btn-ghost" onClick={() => { p?.resolve(null); setP(null); }}>Cancel</button><button className="btn btn-primary" onClick={() => { const v = p!.draft; p!.resolve(v); setP(null); }}>{p?.confirmLabel || 'Save'}</button></>}>
+        <div className="stack">
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>{p?.message}</p>
+          <input autoFocus className="input mono" value={p?.draft ?? ''} onChange={(e) => setP((prev) => prev ? { ...prev, draft: e.target.value } : prev)} onKeyDown={(e) => { if (e.key === 'Enter') { const v = (e.target as HTMLInputElement).value; p!.resolve(v); setP(null); } }} placeholder={p?.placeholder || ''} />
+        </div>
+      </Modal>
+    </ConfirmCtx.Provider>
+  );
 }
 
 function Skeleton({ lines = 3 }: { lines?: number }) {
@@ -146,6 +192,7 @@ function AdminSidebar() {
 
 function NodeAllocationsPage() {
   const { id } = useParams() as { id: string };
+  const dialog = useConfirm();
   const [node, setNode] = React.useState<{ id: number; name: string } | null>(null);
   const [rows, setRows] = React.useState<{ id: number; ip: string; ipAlias: string | null; port: number; serverId: number | null }[]>([]);
   const [form, setForm] = React.useState({ ip: '', ports: '', alias: '' });
@@ -181,7 +228,7 @@ function NodeAllocationsPage() {
     setMsg(`Added ${ports.length} allocation${ports.length === 1 ? '' : 's'}.`); setForm({ ip: '', ports: '', alias: '' }); load();
   }
   async function updateAlias(r: { id: number; ip: string; ipAlias: string | null; port: number }) {
-    const val = prompt(`Alias for ${r.ip}:${r.port} (leave empty to clear)`, r.ipAlias ?? '');
+    const val = await dialog.prompt({ title: 'Edit IP alias', message: `Alias for ${r.ip}:${r.port} (leave empty to clear)`, defaultValue: r.ipAlias ?? '', placeholder: 'my.domain.com', confirmLabel: 'Save' });
     if (val === null) return;
     const res = await fetch(`/api/nodes/${id}/allocations/${r.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip_alias: val }) });
     const j = await res.json().catch(() => ({}));
@@ -190,7 +237,7 @@ function NodeAllocationsPage() {
   }
   async function remove(r: { id: number; ip: string; ipAlias: string | null; port: number; serverId: number | null }) {
     if (r.serverId) { setErr('Allocation is in use by a server.'); return; }
-    if (!confirm(`Delete allocation ${r.ip}:${r.port}?`)) return;
+    if (!await dialog.confirm({ title: 'Delete allocation', message: `Delete allocation ${r.ip}:${r.port}? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
     const res = await fetch(`/api/nodes/${id}/allocations/${r.id}`, { method: 'DELETE', credentials: 'include' });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
@@ -361,10 +408,10 @@ function RegisterPage() {
   );
 }
 
-function ServerCard({ s }: { s: { id: number; name: string; status: string; memory: number; disk: number; image?: string; egg?: { banner?: string | null; name?: string } | null } }) {
+function ServerCard({ s }: { s: { id: number; name: string; status: string; memory: number; disk: number; image?: string; banner?: string | null; egg?: { banner?: string | null; name?: string } | null } }) {
   const running = s.status === 'running';
   const img = s.egg?.name || (s.image || '').split('/').pop()?.split(':')[0] || 'server';
-  const banner = s.egg?.banner || null;
+  const banner = s.banner || s.egg?.banner || null;
   return (
     <NavLink to={`/server/${s.id}`} className={`server-card${banner ? ' has-banner' : ''}`} style={{ textDecoration: 'none', color: 'inherit', ...(banner ? { backgroundImage: `url("${banner}")` } : {}) }}>
       {banner && <div className="server-card-banner-overlay" style={{ display: 'none' }} />}
@@ -385,60 +432,153 @@ function ServerCard({ s }: { s: { id: number; name: string; status: string; memo
   );
 }
 
-function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string } }) {
-  return (
-    <div className="server-card" style={{ cursor: 'default' }}>
+function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string; assignmentId?: number } }) {
+  const body = (
+    <div className="server-card" style={{ cursor: v.assignmentId ? 'pointer' : 'default' }}>
       <div className="server-card-banner">
         <div className="server-card-icon"><FiServer size={20} /></div>
         <span className={`badge badge-${v.status === 'running' ? 'active' : 'suspended'}`} style={{ marginLeft: 'auto' }}>{v.status}</span>
       </div>
       <div className="server-card-body">
         <div className="server-card-title">{v.name}</div>
-        <div className="server-card-img mono muted">{v.clusterName} · {v.node}</div>
+        <div className="server-card-img mono muted">{v.clusterName} · {v.node} · VM {v.vmid}</div>
         <div className="server-card-stats">
           <div className="stat"><FiCpu size={12} /><span>{v.cpus} vCPU</span></div>
           <div className="stat"><FiHardDrive size={12} /><span>{Math.round(v.maxmem / 1048576)} MB</span></div>
-          <div className="stat"><FiDatabase size={12} /><span>{Math.round(v.maxdisk / 1048576)} GB</span></div>
+          <div className="stat"><FiDatabase size={12} /><span>{Math.round(v.maxdisk / 1048576)} MB</span></div>
         </div>
       </div>
+    </div>
+  );
+  return v.assignmentId ? <NavLink to={`/vps/${v.assignmentId}`} style={{ textDecoration: 'none', color: 'inherit' }}>{body}</NavLink> : body;
+}
+
+function VpsManage() {
+  const { id } = useParams() as { id: string };
+  const aid = parseInt(id || '0', 10);
+  const [data, setData] = React.useState<{ assignment: { id: number; node: string; type: string; vmid: number }; cluster: { id: number; name: string; host: string }; status: Record<string, unknown>; config: Record<string, unknown> } | null>(null);
+  const [err, setErr] = React.useState(''); const [busy, setBusy] = React.useState(''); const [msg, setMsg] = React.useState('');
+  const [tab, setTab] = React.useState<'console' | 'power'>('console');
+  const toast = useToast();
+  const statusStr = String((data?.status as Record<string, unknown>)?.status || (data?.status as Record<string, unknown>)?.qmpstatus || 'unknown');
+  const load = React.useCallback(() => {
+    fetch(`/api/proxmox/vms/${aid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (j.data) setData(j.data); else setErr(j.errors?.[0]?.detail || 'Not found'); }).catch(() => setErr('Failed to load VPS'));
+  }, [aid]);
+  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { if (tab === 'console') { const t = window.setInterval(load, 5000); return () => window.clearInterval(t); } }, [tab, load]);
+  async function power(action: string) {
+    setBusy(action); setErr(''); setMsg('');
+    const r = await fetch(`/api/proxmox/vms/${aid}/power`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || `Power ${action} failed`); setBusy(''); return; }
+    setMsg(`${action} sent`); toast?.show(`${action} sent`); setBusy(''); setTimeout(load, 800);
+  }
+  async function openConsole() {
+    setErr(''); setMsg('');
+    const r = await fetch(`/api/proxmox/vms/${aid}/vncproxy`, { method: 'POST', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.data) { setErr(j.errors?.[0]?.detail || 'Console not available'); return; }
+    const pveHost = j.data.host as string;
+    const base = pveHost.replace(/\/$/, '');
+    window.open(`${base}/?console=kvm&vmid=${data?.assignment.vmid}&node=${data?.assignment.node}&resize=scale`, '_blank');
+  }
+  if (err && !data) return <div className="page"><div className="alert alert-error">{err}</div><NavLink to="/" className="btn btn-ghost btn-sm">Back</NavLink></div>;
+  if (!data) return <div className="page"><Skeleton lines={4} /></div>;
+  return (
+    <div className="page">
+      <div className="page-head" style={{ alignItems: 'center' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 className="h1">VPS {data.assignment.vmid} · {(data.status as Record<string, unknown>).name as string || `VM ${data.assignment.vmid}`}</h1>
+          <p className="lede mono muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: 0 }}>
+            <span>{data.cluster.name} · {data.assignment.node}/{data.assignment.type}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span className={`status-dot ${statusStr === 'running' ? 'running' : statusStr === 'stopped' ? 'offline' : 'starting'}`} /><span style={{ color: 'var(--muted)' }}>{statusStr}</span></span>
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button className="btn btn-start btn-sm" disabled={!!busy} onClick={() => power('start')}><FiPlay size={12} /> Start</button>
+          <button className="btn btn-stop btn-sm" disabled={!!busy} onClick={() => power('stop')}><FiSquare size={12} /> Stop</button>
+          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('shutdown')}><FiSquare size={12} /> Shutdown</button>
+          <button className="btn btn-restart btn-sm" disabled={!!busy} onClick={() => power('reboot')}><FiRotateCcw size={12} /> Reboot</button>
+          <NavLink to="/" className="btn btn-ghost btn-sm"><FiChevronLeft size={12} /> Back</NavLink>
+        </div>
+      </div>
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="tabs"><button className={`tab ${tab === 'console' ? 'tab-active' : ''}`} onClick={() => setTab('console')}>Console</button><button className={`tab ${tab === 'power' ? 'tab-active' : ''}`} onClick={() => setTab('power')}>Details</button></div>
+      {tab === 'console' && (
+        <Card title="Console (noVNC)">
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Opens Proxmox noVNC console with a fresh ticket. Allow popups for your PVE host.</p>
+          <div style={{ display: 'flex', gap: 8 }}><button className="btn btn-primary" onClick={openConsole}><FiTerminal size={13} /> Open console</button><button className="btn btn-ghost" onClick={load}><FiRefreshCw size={12} /> Refresh status</button></div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>Ticket is short-lived. If console says expired, click Open again.</div>
+        </Card>
+      )}
+      {tab === 'power' && (
+        <div className="stack">
+          <Card title="Status">
+            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.status, null, 2)}</pre>
+          </Card>
+          <Card title="Config">
+            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.config, null, 2)}</pre>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── User ──
 function UserOverview() {
-  const [servers, setServers] = React.useState<{ id: number; name: string; status: string; memory: number; disk: number; image?: string; egg?: { banner?: string | null; name?: string } | null }[]>([]);
-  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string }[]>([]);
+  const { me } = useMe();
+  const [servers, setServers] = React.useState<{ id: number; name: string; status: string; memory: number; disk: number; image?: string; banner?: string | null; userId?: number; egg?: { banner?: string | null; name?: string } | null }[]>([]);
+  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string; assignmentId?: number; ownerId?: number }[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [scope, setScope] = React.useState<'mine' | 'others'>('mine');
   React.useEffect(() => {
     Promise.all([
       fetch('/api/servers', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
       fetch('/api/proxmox/vms', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
     ]).then(([s, v]) => { setServers(s.data || []); setVps(v.data || []); }).finally(() => setLoading(false));
   }, []);
+  const mineServers = React.useMemo(() => me ? servers.filter((s) => s.userId === me.id) : servers, [servers, me]);
+  const otherServers = React.useMemo(() => me ? servers.filter((s) => s.userId !== me.id) : [], [servers, me]);
+  const mineVps = React.useMemo(() => me ? vps.filter((v) => v.ownerId === undefined || v.ownerId === me.id) : vps, [vps, me]);
+  const otherVps = React.useMemo(() => me ? vps.filter((v) => v.ownerId !== undefined && v.ownerId !== me.id) : [], [vps, me]);
+  const showToggle = !!me?.isAdmin;
+  const displayServers = !showToggle ? servers : scope === 'mine' ? mineServers : otherServers;
+  const displayVps = !showToggle ? vps : scope === 'mine' ? mineVps : otherVps;
+  const hasServers = displayServers.length > 0;
+  const hasVps = displayVps.length > 0;
+  const mineCount = mineServers.length + mineVps.length;
+  const otherCount = otherServers.length + otherVps.length;
   if (loading) return <div className="page"><Skeleton lines={3} /></div>;
-  const hasServers = servers.length > 0;
-  const hasVps = vps.length > 0;
   return (
     <div className="page">
-      <h1 className="h1">Overview</h1>
+      <div className="page-head" style={{ alignItems: 'center' }}>
+        <h1 className="h1">Overview</h1>
+        {showToggle && (
+          <div className="seg-toggle" role="tablist" aria-label="Server scope">
+            <button role="tab" aria-selected={scope === 'mine'} className={`seg-btn ${scope === 'mine' ? 'active' : ''}`} onClick={() => setScope('mine')}>My servers <span className="seg-count">{mineCount}</span></button>
+            <button role="tab" aria-selected={scope === 'others'} className={`seg-btn ${scope === 'others' ? 'active' : ''}`} onClick={() => setScope('others')}>Others’ servers <span className="seg-count">{otherCount}</span></button>
+          </div>
+        )}
+      </div>
       {!hasServers && !hasVps ? (
         <div className="transparent-card">
-          <div className="transparent-card-title">No servers yet</div>
-          <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>Your game servers and VPS will appear here when an admin assigns them.</p>
+          <div className="transparent-card-title">{showToggle && scope === 'others' ? 'No other servers' : 'No servers yet'}</div>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{showToggle && scope === 'others' ? 'No servers owned by other users.' : 'Your game servers and VPS will appear here when an admin assigns them.'}</p>
         </div>
       ) : (
         <>
           {hasServers && (
             <>
-              <div className="server-section-title">Game servers</div>
-              <div className="server-grid">{servers.map((s) => <ServerCard key={s.id} s={s} />)}</div>
+              <div className="server-section-title">Game servers{showToggle ? ` · ${scope === 'mine' ? 'yours' : 'others'}` : ''}</div>
+              <div className="server-grid">{displayServers.map((s) => <ServerCard key={s.id} s={s} />)}</div>
             </>
           )}
           {hasVps && (
             <>
-              <div className="server-section-title">VPS</div>
-              <div className="server-grid">{vps.map((v) => <VpsCard key={`${v.clusterName}-${v.vmid}`} v={v} />)}</div>
+              <div className="server-section-title">VPS{showToggle ? ` · ${scope === 'mine' ? 'yours' : 'others'}` : ''}</div>
+              <div className="server-grid">{displayVps.map((v) => <VpsCard key={`${v.clusterName}-${v.vmid}-${v.assignmentId ?? ''}`} v={v} />)}</div>
             </>
           )}
         </>
@@ -451,13 +591,29 @@ function ServerManage() {
   const { id } = useParams() as { id: string };
   const sid = parseInt(id || '0', 10);
   const [tab, setTab] = React.useState('console');
-  const [srv, setSrv] = React.useState<{ id: number; uuid: string; name: string; status: string; memory: number; disk: number; cpu: number; image: string; startup: string; description: string | null; allocation: { id: number; ip: string; port: number } | null; node: { name: string; scheme: string; fqdn: string; daemonListen: number } | null } | null>(null);
+  const [srv, setSrv] = React.useState<{ id: number; uuid: string; name: string; status: string; memory: number; disk: number; cpu: number; image: string; startup: string; description: string | null; banner: string | null; egg?: { banner?: string | null; name?: string } | null; allocation: { id: number; ip: string; port: number; ipAlias?: string | null } | null; node: { name: string; scheme: string; fqdn: string; daemonListen: number } | null } | null>(null);
   const [err, setErr] = React.useState('');
+  const [liveStatus, setLiveStatus] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState('');
+  const toast = useToast();
   React.useEffect(() => {
     fetch(`/api/servers/${sid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (j.data) setSrv(j.data); else setErr(j.errors?.[0]?.detail || 'Server not found'); });
   }, [sid]);
+  async function power(action: string) {
+    setBusy(action);
+    try { await fetch(`/api/servers/${sid}/power`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }); }
+    catch { /* ignore */ }
+    setTimeout(() => setBusy(''), 1200);
+  }
   if (err) return <div className="page"><div className="alert alert-error">{err}</div><NavLink to="/" className="btn btn-ghost btn-sm">Back to overview</NavLink></div>;
   if (!srv) return <div className="page"><Skeleton lines={6} /></div>;
+  const status = liveStatus || srv.status || 'unknown';
+  const addr = srv.allocation ? (srv.allocation.ipAlias || srv.allocation.ip) + ':' + srv.allocation.port : null;
+  async function copyAddr() {
+    if (!addr) return;
+    try { await navigator.clipboard.writeText(addr); } catch { const ta = document.createElement('textarea'); ta.value = addr; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    toast?.show(`Copied ${addr}`);
+  }
   const tabs = [
     { key: 'console', label: 'Console', Icon: FiTerminal },
     { key: 'files', label: 'Files', Icon: FiFolder },
@@ -468,9 +624,25 @@ function ServerManage() {
   ];
   return (
     <div className="page">
-      <div className="page-head"><div><h1 className="h1">{srv.name}</h1><p className="lede mono muted">{srv.uuid}</p></div><NavLink to="/" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink></div>
+      <div className="page-head" style={{ alignItems: 'center' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 className="h1">{srv.name}</h1>
+          <p className="lede mono muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: 0 }}>
+            <span>{srv.uuid}</span>
+            {addr && <span onClick={copyAddr} title={`Click to copy ${addr}`} style={{ color: 'var(--text)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{addr}<FiCopy size={12} style={{ color: 'var(--muted)' }} /></span>}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span className={`status-dot ${status}`} /><span style={{ color: 'var(--muted)' }}>{status}</span></span>
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn btn-start btn-sm" disabled={!!busy} onClick={() => power('start')}><FiPlay size={13} /> Start</button>
+          <button className="btn btn-restart btn-sm" disabled={!!busy} onClick={() => power('restart')}><FiRotateCcw size={13} /> Restart</button>
+          <button className="btn btn-stop btn-sm" disabled={!!busy} onClick={() => power('stop')}><FiSquare size={13} /> Stop</button>
+          <button className="btn btn-kill btn-sm" disabled={!!busy} onClick={() => power('kill')}><FiX size={13} /> Kill</button>
+          <NavLink to="/" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink>
+        </div>
+      </div>
       <div className="tabs">{tabs.map((t) => <button key={t.key} className={`tab ${tab === t.key ? 'tab-active' : ''}`} onClick={() => setTab(t.key)}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><t.Icon size={13} />{t.label}</span></button>)}</div>
-      {tab === 'console' && <ConsoleTab id={sid} />}
+      {tab === 'console' && <ConsoleTab id={sid} srv={srv} onStatus={setLiveStatus} />}
       {tab === 'files' && <FilesTab id={sid} />}
       {tab === 'backups' && <BackupsTab id={sid} />}
       {tab === 'allocations' && <AllocationsTab id={sid} srv={srv} />}
@@ -514,11 +686,11 @@ function AnsiText({ text }: { text: string }) {
   return <>{nodes}</>;
 }
 
-function ConsoleTab({ id }: { id: number }) {
+function ConsoleTab({ id, srv, onStatus }: { id: number; srv: { allocation: { id: number; ip: string; port: number } | null; node: { name: string; scheme: string; fqdn: string; daemonListen: number } | null } | null; onStatus?: (s: string) => void }) {
   const [lines, setLines] = React.useState<{ text: string; key: number }[]>([]);
   const [status, setStatus] = React.useState('connecting');
+  const [stats, setStats] = React.useState<{ memory?: number; memory_limit?: number; cpu_absolute?: number; disk?: number; disk_limit?: number } | null>(null);
   const [cmd, setCmd] = React.useState('');
-  const [busy, setBusy] = React.useState('');
   const [showEula, setShowEula] = React.useState(false);
   const [eulaBusy, setEulaBusy] = React.useState(false);
   const [eulaMsg, setEulaMsg] = React.useState('');
@@ -526,6 +698,7 @@ function ConsoleTab({ id }: { id: number }) {
   const boxRef = React.useRef<HTMLDivElement>(null);
   const lineKey = React.useRef(0);
   const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').replace(/\u001b\][^\u0007]*\u0007/g, '');
+  React.useEffect(() => { onStatus?.(status); }, [status, onStatus]);
   React.useEffect(() => {
     let ws: WebSocket | null = null;
     let closed = false;
@@ -545,6 +718,10 @@ function ConsoleTab({ id }: { id: number }) {
             const m = JSON.parse(e.data as string);
             if (m.event === 'auth success') setStatus('running');
             else if (m.event === 'status') setStatus(m.args?.[0] || 'unknown');
+            else if (m.event === 'stats') {
+              const s = m.args?.[0];
+              if (s && typeof s === 'object') setStats({ memory: s.memory, memory_limit: s.memory_limit, cpu_absolute: s.cpu_absolute, disk: s.disk, disk_limit: s.disk_limit });
+            }
             else if (m.event === 'console output' || m.event === 'daemon message' || m.event === 'install output') {
               const t = String(m.args?.[0] || '');
               setLines((p) => [...p.slice(-499), { text: t, key: lineKey.current++ }]);
@@ -560,12 +737,6 @@ function ConsoleTab({ id }: { id: number }) {
     return () => { closed = true; ws?.close(); wsRef.current = null; };
   }, [id]);
   React.useEffect(() => { boxRef.current?.scrollTo(0, boxRef.current.scrollHeight); }, [lines]);
-  async function power(action: string) {
-    setBusy(action);
-    try { await fetch(`/api/servers/${id}/power`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }); }
-    catch { /* ignore */ }
-    setTimeout(() => setBusy(''), 1200);
-  }
   function send(e: React.FormEvent) {
     e.preventDefault();
     if (!cmd.trim()) return;
@@ -581,20 +752,11 @@ function ConsoleTab({ id }: { id: number }) {
       if (!r.ok) { setEulaMsg(j.errors?.[0]?.detail || 'Failed to accept EULA'); return; }
       setShowEula(false);
       wsRef.current?.send(JSON.stringify({ event: 'send command', args: [''] }));
-      power('restart');
+      wsRef.current?.send(JSON.stringify({ event: 'set_state', args: ['restart'] }));
     } finally { setEulaBusy(false); }
   }
   return (
     <div className="console">
-      <div className="console-head">
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><span className={`status-dot ${status}`} /> <span className="mono muted" style={{ fontSize: 12 }}>{status}</span></span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('start')}><FiPlay size={13} /> Start</button>
-          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('restart')}><FiRotateCcw size={13} /> Restart</button>
-          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('stop')}><FiSquare size={13} /> Stop</button>
-          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('kill')}><FiX size={13} /> Kill</button>
-        </div>
-      </div>
       <div className="console-body" ref={boxRef}>
         {lines.length === 0 && <span className="dim">Waiting for console output…</span>}
         {lines.map((l) => <div key={l.key} className="console-line"><AnsiText text={l.text} /></div>)}
@@ -603,6 +765,13 @@ function ConsoleTab({ id }: { id: number }) {
         <input className="input" style={{ flex: 1 }} placeholder="Type a command…" value={cmd} onChange={(e) => setCmd(e.target.value)} autoComplete="off" />
         <button className="btn btn-primary" type="submit">Send</button>
       </form>
+      {stats && (
+        <div className="console-stats">
+          <div className="stat"><FiCpu size={12} /> CPU <b>{(stats.cpu_absolute ?? 0).toFixed(1)}%</b></div>
+          <div className="stat"><FiHardDrive size={12} /> RAM <b>{stats.memory != null ? Math.round(stats.memory / 1048576) : '0'} MB</b>{stats.memory_limit ? <span className="muted"> / {Math.round(stats.memory_limit / 1048576)} MB</span> : null}</div>
+          <div className="stat"><FiDatabase size={12} /> Disk <b>{stats.disk != null ? Math.round(stats.disk / 1048576) : '0'} MB</b>{stats.disk_limit ? <span className="muted"> / {Math.round(stats.disk_limit / 1048576)} MB</span> : null}</div>
+        </div>
+      )}
       <Modal open={showEula} onClose={() => setShowEula(false)} title="Minecraft EULA" footer={<><button className="btn btn-ghost" onClick={() => setShowEula(false)}>Cancel</button><button className="btn btn-primary" disabled={eulaBusy} onClick={acceptEula}>{eulaBusy ? 'Accepting…' : 'Accept EULA'}</button></>}>
         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
           <p style={{ marginTop: 0 }}>This server runs Minecraft software and requires you to agree to the <b>Minecraft End User License Agreement</b> before it can start.</p>
@@ -616,6 +785,7 @@ function ConsoleTab({ id }: { id: number }) {
 }
 
 function FilesTab({ id }: { id: number }) {
+  const dialog = useConfirm();
   const [dir, setDir] = React.useState('/');
   const [files, setFiles] = React.useState<{ name: string; directory: boolean; size: number; mode: string; modified: string }[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -664,11 +834,11 @@ function FilesTab({ id }: { id: number }) {
   }
   async function del(names: string[]) {
     const list = names.map((n) => pathOf(n));
-    if (!confirm(`Delete ${list.length} ${list.length === 1 ? 'item' : 'items'}?`)) return;
+    if (!await dialog.confirm({ title: 'Delete files', message: `Delete ${list.length} ${list.length === 1 ? 'item' : 'items'}? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
     if (await api('/delete', 'POST', { root: '/', files: list })) { setSelected(new Set()); load(); }
   }
   async function rename(name: string) {
-    const to = prompt(`Rename ${name} to:`, name);
+    const to = await dialog.prompt({ title: 'Rename', message: `Rename "${name}" to:`, defaultValue: name, placeholder: name });
     if (!to || to === name) return;
     const np = pathOf(to);
     if (await api('/rename', 'POST', { root: '/', files: [{ from: pathOf(name), to: np }] })) load();
@@ -776,6 +946,7 @@ function FilesTab({ id }: { id: number }) {
 }
 
 function BackupsTab({ id }: { id: number }) {
+  const dialog = useConfirm();
   const [backups, setBackups] = React.useState<{ uuid: string; name: string; size: number; status: string; createdAt: string; completedAt: string | null }[]>([]);
   const [limit, setLimit] = React.useState(0);
   const [busy, setBusy] = React.useState('');
@@ -793,7 +964,7 @@ function BackupsTab({ id }: { id: number }) {
     setBusy(''); load();
   }
   async function restore(uuid: string) {
-    if (!confirm('Restore this backup? This will overwrite the current server files and stop the server.')) return;
+    if (!await dialog.confirm({ title: 'Restore backup', message: 'Restore this backup? This will overwrite the current server files and stop the server.', confirmLabel: 'Restore' })) return;
     setBusy(uuid); setErr(''); setMsg('');
     const r = await fetch(`/api/servers/${id}/backups/${uuid}/restore`, { method: 'POST', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
@@ -801,7 +972,7 @@ function BackupsTab({ id }: { id: number }) {
     setBusy(''); load();
   }
   async function remove(uuid: string) {
-    if (!confirm('Delete this backup?')) return;
+    if (!await dialog.confirm({ title: 'Delete backup', message: 'Delete this backup? This cannot be undone.', confirmLabel: 'Delete', danger: true })) return;
     setBusy(uuid); setErr(''); setMsg('');
     const r = await fetch(`/api/servers/${id}/backups/${uuid}`, { method: 'DELETE', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
@@ -962,21 +1133,26 @@ function StartupTab({ id }: { id: number }) {
   );
 }
 
-function SettingsTab({ id, srv, onSaved }: { id: number; srv: { name: string; description: string | null; memory: number; disk: number; cpu: number; image: string }; onSaved: (d: Partial<{ name: string; description: string | null }>) => void }) {
+function SettingsTab({ id, srv, onSaved }: { id: number; srv: { name: string; description: string | null; banner: string | null; memory: number; disk: number; cpu: number; image: string; egg?: { banner?: string | null; name?: string } | null }; onSaved: (d: Partial<{ name: string; description: string | null; banner: string | null }>) => void }) {
+  const dialog = useConfirm();
   const [name, setName] = React.useState(srv.name);
   const [description, setDescription] = React.useState(srv.description || '');
+  const [banner, setBanner] = React.useState(srv.banner || '');
   const [msg, setMsg] = React.useState('');
   const [err, setErr] = React.useState('');
   const [booting, setBooting] = React.useState(false);
+  React.useEffect(() => { setBanner(srv.banner || ''); }, [srv.banner]);
+  const eggBanner = srv.egg?.banner || null;
+  const effectiveBanner = banner.trim() || null || eggBanner;
   async function save(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setMsg('');
-    const res = await fetch(`/api/servers/${id}/settings`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description }) });
+    const res = await fetch(`/api/servers/${id}/settings`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description, banner: banner.trim() ? banner.trim() : null }) });
     const j = await res.json();
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
-    setMsg('Saved.'); onSaved(j.data || { name, description });
+    setMsg('Saved.'); onSaved(j.data || { name, description, banner: banner.trim() || null });
   }
   async function reinstall() {
-    if (!confirm('Reinstall this server? All existing server files will be wiped and reinstalled.')) return;
+    if (!await dialog.confirm({ title: 'Reinstall server', message: 'Reinstall this server? All existing server files will be wiped and reinstalled.', confirmLabel: 'Reinstall', danger: true })) return;
     setErr(''); setMsg(''); setBooting(true);
     try {
       const res = await fetch(`/api/servers/${id}/reinstall`, { method: 'POST', credentials: 'include' });
@@ -993,7 +1169,13 @@ function SettingsTab({ id, srv, onSaved }: { id: number; srv: { name: string; de
         <form onSubmit={save} className="form">
           <label className="field"><span className="label">Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label className="field"><span className="label">Description</span><input className="input" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-          <button className="btn btn-primary" type="submit"><FiSave size={13} /> Save</button>
+          <label className="field"><span className="label">Banner image URL <span className="mono muted" style={{ fontWeight: 400, fontSize: 11 }}>· overrides egg banner — leave empty to use default</span></span><input className="input mono" value={banner} onChange={(e) => setBanner(e.target.value)} placeholder="https://…/banner.png" /></label>
+          {effectiveBanner && <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--line)', maxWidth: 420 }}><img src={effectiveBanner} alt="Banner preview" style={{ width: '100%', display: 'block', aspectRatio: '3 / 1', objectFit: 'cover' }} onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} /></div>}
+          {!banner.trim() && eggBanner && <div className="muted" style={{ fontSize: 11 }}>Using egg default. Paste a URL to override.</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" type="submit"><FiSave size={13} /> Save</button>
+            {banner.trim() && <button className="btn btn-ghost btn-sm" type="button" onClick={() => setBanner('')}>Reset to egg default</button>}
+          </div>
         </form>
       </Card>
       <Card title="Allocation">
@@ -1325,6 +1507,7 @@ function NewServerPage() {
 function ServerEditorPage() {
   const { id } = useParams() as { id: string };
   const serverId = Number(id);
+  const dialog = useConfirm();
   const nav = useNavigate();
   const [srv, setSrv] = React.useState<any>(null);
   const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
@@ -1386,7 +1569,7 @@ function ServerEditorPage() {
   }
   async function setVar(i: number, value: string) { setVars((p) => p.map((v, j) => (j === i ? { ...v, value } : v))); }
   async function reinstall() {
-    if (!confirm('Reinstall this server? Its files will be wiped and the install script re-run.')) return;
+    if (!await dialog.confirm({ title: 'Reinstall server', message: 'Reinstall this server? Its files will be wiped and the install script re-run.', confirmLabel: 'Reinstall', danger: true })) return;
     setErr(''); setMsg(''); setBooting(true);
     const res = await fetch(`/api/servers/${id}/reinstall`, { method: 'POST', credentials: 'include' });
     const j = await res.json().catch(() => ({}));
@@ -1395,7 +1578,7 @@ function ServerEditorPage() {
     setMsg('Reinstall started on the daemon.'); load();
   }
   async function del() {
-    if (!confirm('Delete this server permanently? This wipes it from Wings too.')) return;
+    if (!await dialog.confirm({ title: 'Delete server', message: 'Delete this server permanently? This wipes it from Wings too. This cannot be undone.', confirmLabel: 'Delete', danger: true })) return;
     const res = await fetch(`/api/servers/${id}`, { method: 'DELETE', credentials: 'include' });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
@@ -1478,7 +1661,121 @@ function ServerEditorPage() {
   );
 }
 
+function AdminServersVpsTab() {
+  const dialog = useConfirm();
+  const [clusters, setClusters] = React.useState<{ id: number; name: string; host: string }[]>([]);
+  const [clusterId, setClusterId] = React.useState<number | null>(null);
+  const [vms, setVms] = React.useState<{ vmid: number; name: string; status: string; node: string; type: string; cpus: number; maxmem: number; maxdisk: number; assignmentId: number | null; ownerId: number | null; owner: { id: number; username: string; email: string } | null }[]>([]);
+  const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState('');
+  const [assignFor, setAssignFor] = React.useState<{ node: string; type: 'qemu' | 'lxc'; vmid: number; name: string } | null>(null);
+  const [assignee, setAssignee] = React.useState('');
+  const [showCreate, setShowCreate] = React.useState(false);
+  const [create, setCreate] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', name: '', cores: '2', memory: '2048', storage: 'local-lvm', userId: '' });
+  const toast = useToast();
+  const loadClusters = React.useCallback(() => fetch('/api/proxmox/clusters', { credentials: 'include' }).then((r) => r.json()).then((j) => { setClusters(j.data || []); if (j.data?.[0] && clusterId === null) setClusterId(j.data[0].id); }), [clusterId]);
+  const loadVms = React.useCallback(() => {
+    if (!clusterId) return;
+    setLoading(true); setErr('');
+    fetch(`/api/proxmox/clusters/${clusterId}/vms`, { credentials: 'include' }).then((r) => r.json()).then((j) => {
+      if (!j.data) { setErr(j.errors?.[0]?.detail || 'Failed to load VMs'); setVms([]); return; }
+      setVms(j.data);
+    }).catch(() => setErr('Failed to load VMs')).finally(() => setLoading(false));
+  }, [clusterId]);
+  const loadUsers = React.useCallback(() => fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])), []);
+  React.useEffect(() => { loadClusters(); loadUsers(); }, [loadClusters, loadUsers]);
+  React.useEffect(() => { loadVms(); }, [loadVms]);
+  async function doAssign(e: React.FormEvent) {
+    e.preventDefault(); if (!assignFor || !assignee || !clusterId) return;
+    const res = await fetch('/api/proxmox/assignments', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clusterId, node: assignFor.node, type: assignFor.type, vmid: assignFor.vmid, userId: parseInt(assignee, 10) }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Assign failed'); return; }
+    setMsg(`Assigned ${assignFor.name} to ${users.find((u) => String(u.id) === assignee)?.username || assignee}`); setAssignFor(null); toast?.show('VPS assigned'); loadVms();
+  }
+  async function unassign(id: number) {
+    if (!await dialog.confirm({ title: 'Unassign VPS', message: 'Unassign this VM from its owner? The VM will become unassigned.', confirmLabel: 'Unassign' })) return;
+    const r = await fetch(`/api/proxmox/assignments/${id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    setMsg('Unassigned.'); toast?.show('Unassigned'); loadVms();
+  }
+  async function power(node: string, type: 'qemu' | 'lxc', vmid: number, action: string) {
+    setErr(''); setMsg('');
+    const r = await fetch(`/api/proxmox/clusters/${clusterId}/nodes/${node}/${type}/${vmid}/${action}`, { method: 'POST', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || `Power ${action} failed`); return; }
+    setMsg(`${action} sent to ${vmid}`); toast?.show(`${action} sent`); setTimeout(loadVms, 800);
+  }
+  async function doCreate(e: React.FormEvent) {
+    e.preventDefault(); if (!clusterId) return;
+    const body: Record<string, unknown> = { node: create.node, type: create.type };
+    if (create.vmid) body.vmid = parseInt(create.vmid, 10);
+    if (create.name) body.name = create.name;
+    if (create.cores) body.cores = parseInt(create.cores, 10);
+    if (create.memory) body.memory = parseInt(create.memory, 10);
+    if (create.storage) body.storage = create.storage;
+    if (create.userId) body.userId = parseInt(create.userId, 10);
+    const r = await fetch(`/api/proxmox/clusters/${clusterId}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Create failed'); return; }
+    setMsg('VM creation started.'); setShowCreate(false); toast?.show('VM creation started'); loadVms();
+  }
+  return (
+    <div className="stack">
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <Card title={`VPS / VMs — ${clusters.find((c) => c.id === clusterId)?.name || '—'}`} action={<div style={{ display: 'flex', gap: 8 }}><select className="input" style={{ width: 180, minHeight: 32 }} value={clusterId ?? ''} onChange={(e) => setClusterId(parseInt(e.target.value, 10) || null)}>{clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><button className="btn btn-ghost btn-sm" onClick={loadVms}><FiRefreshCw size={12} /> Refresh</button>{clusterId ? <NavLink to={`/admin/proxmox/${clusterId}/vms/new`} className="btn btn-primary btn-sm"><FiPlus size={12} /> New VM</NavLink> : <button className="btn btn-primary btn-sm" disabled><FiPlus size={12} /> New VM</button>}</div>}>
+        {loading ? <Skeleton lines={4} /> : vms.length === 0 ? <p className="muted">No VMs found on this cluster. Create one or check Proxmox connectivity.</p> : (
+          <div className="table-wrap"><table className="table"><thead><tr><th>VMID</th><th>Name</th><th>Node / Type</th><th>Status</th><th>Owner</th><th>Specs</th><th className="right">Actions</th></tr></thead><tbody>{vms.map((v) => (
+            <tr key={`${v.node}-${v.type}-${v.vmid}`}>
+              <td className="mono">{v.vmid}</td>
+              <td>{v.name}<div className="muted" style={{ fontSize: 11 }}>{v.type}</div></td>
+              <td className="mono muted" style={{ fontSize: 12 }}>{v.node}</td>
+              <td><span className={`badge badge-${v.status === 'running' ? 'active' : 'suspended'}`}>{v.status}</span></td>
+              <td>{v.owner ? <span className="mono" style={{ fontSize: 12 }}>{v.owner.username}</span> : <span className="muted">— unassigned</span>}</td>
+              <td className="mono muted" style={{ fontSize: 11 }}>{v.cpus} vCPU · {Math.round(v.maxmem / 1048576)} MB · {Math.round(v.maxdisk / 1048576)} MB</td>
+              <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                {v.assignmentId ? <button className="btn btn-ghost btn-sm" onClick={() => unassign(v.assignmentId!)}>Unassign</button> : <button className="btn btn-ghost btn-sm" onClick={() => setAssignFor({ node: v.node, type: v.type as 'qemu' | 'lxc', vmid: v.vmid, name: v.name })}>Assign</button>}
+                <button className="btn btn-ghost btn-sm" title="Start" onClick={() => power(v.node, v.type as 'qemu' | 'lxc', v.vmid, 'start')}><FiPlay size={11} /></button>
+                <button className="btn btn-ghost btn-sm" title="Shutdown" onClick={() => power(v.node, v.type as 'qemu' | 'lxc', v.vmid, 'shutdown')}><FiSquare size={11} /></button>
+                <button className="btn btn-ghost btn-sm" title="Reboot" onClick={() => power(v.node, v.type as 'qemu' | 'lxc', v.vmid, 'reboot')}><FiRotateCcw size={11} /></button>
+              </td>
+            </tr>
+          ))}</tbody></table></div>
+        )}
+      </Card>
+      <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title={`Assign VM ${assignFor?.vmid || ''} — ${assignFor?.name || ''}`} footer={<><button className="btn btn-ghost" onClick={() => setAssignFor(null)}>Cancel</button><button className="btn btn-primary" form="pve-assign">Assign</button></>}>
+        <form id="pve-assign" onSubmit={doAssign} className="form">
+          <label className="field"><span className="label">Assign to user</span><select className="input" value={assignee} onChange={(e) => setAssignee(e.target.value)} required><option value="">Choose user…</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
+          <div className="muted" style={{ fontSize: 12 }}>VM {assignFor?.node}/{assignFor?.type}/{assignFor?.vmid} will be visible only to this user (and admins).</div>
+        </form>
+      </Modal>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New VM / Container" footer={<><button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button><button className="btn btn-primary" form="pve-create">Create</button></>}>
+        <form id="pve-create" onSubmit={doCreate} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Node</span><input className="input mono" value={create.node} onChange={(e) => setCreate({ ...create, node: e.target.value })} placeholder="pve1" required /></label>
+            <label className="field"><span className="label">Type</span><select className="input" value={create.type} onChange={(e) => setCreate({ ...create, type: e.target.value as 'qemu' | 'lxc' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC</option></select></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">VMID (optional)</span><input className="input mono" value={create.vmid} onChange={(e) => setCreate({ ...create, vmid: e.target.value })} placeholder="auto" /></label>
+            <label className="field"><span className="label">Name</span><input className="input" value={create.name} onChange={(e) => setCreate({ ...create, name: e.target.value })} placeholder="my-vps" /></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">vCPU</span><input className="input mono" value={create.cores} onChange={(e) => setCreate({ ...create, cores: e.target.value })} /></label>
+            <label className="field"><span className="label">RAM MB</span><input className="input mono" value={create.memory} onChange={(e) => setCreate({ ...create, memory: e.target.value })} /></label>
+            <label className="field"><span className="label">Storage</span><input className="input mono" value={create.storage} onChange={(e) => setCreate({ ...create, storage: e.target.value })} placeholder="local-lvm" /></label>
+          </div>
+          <label className="field"><span className="label">Assign to user (optional)</span><select className="input" value={create.userId} onChange={(e) => setCreate({ ...create, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username}</option>)}</select></label>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
 function AdminServers() {
+  const dialog = useConfirm();
+  const [tab, setTab] = React.useState<'game' | 'vps'>('game');
   const [rows, setRows] = React.useState<{ id: number; name: string; status: string; userId: number; memory: number; disk: number; cpu: number; nodeId: number; eggId: number }[]>([]);
   const [users, setUsers] = React.useState<{ id: number; username: string }[]>([]);
   const [nodes, setNodes] = React.useState<{ id: number; name: string }[]>([]);
@@ -1493,21 +1790,23 @@ function AdminServers() {
   async function setStatus(id: number, status: string) {
     const res = await fetch(`/api/servers/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) { alert(j.errors?.[0]?.detail || 'Failed'); return; }
+    if (!res.ok) { dialog.confirm({ title: 'Error', message: j.errors?.[0]?.detail || 'Failed', confirmLabel: 'OK' }); return; }
     load();
   }
   async function delServer(id: number) {
-    if (!confirm('Delete this server? This cannot be undone.')) return;
+    if (!await dialog.confirm({ title: 'Delete server', message: 'Delete this server? This cannot be undone.', confirmLabel: 'Delete', danger: true })) return;
     const res = await fetch(`/api/servers/${id}`, { method: 'DELETE', credentials: 'include' });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) { alert(j.errors?.[0]?.detail || 'Failed'); return; }
+    if (!res.ok) { dialog.confirm({ title: 'Error', message: j.errors?.[0]?.detail || 'Failed', confirmLabel: 'OK' }); return; }
     load();
   }
   const nodeName = (id: number) => nodes.find((n) => n.id === id)?.name ?? `#${id}`;
   const eggName = (id: number) => eggs.find((e) => e.id === id)?.name ?? `#${id}`;
   return (
     <div className="page">
-      <div className="page-head"><div><h1 className="h1">Servers</h1></div><NavLink to="/admin/servers/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New server</NavLink></div>
+      <div className="page-head"><div><h1 className="h1">Servers</h1><p className="lede">Game servers (Wings) and Proxmox VPS.</p></div><div style={{ display: 'flex', gap: 8 }}>{tab === 'game' && <NavLink to="/admin/servers/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New server</NavLink>}</div></div>
+      <div className="tabs">{(['game', 'vps'] as const).map((k) => <button key={k} className={`tab ${tab === k ? 'tab-active' : ''}`} onClick={() => setTab(k)}>{k === 'game' ? 'Game servers' : 'VPS / VMs (Proxmox)'}</button>)}</div>
+      {tab === 'game' ? (
       <div className="table-wrap"><table className="table"><thead><tr><th>Server</th><th>Owner</th><th>Node</th><th>Egg</th><th>Resources</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={7} className="muted">No servers yet.</td></tr> : rows.map((r) => <tr key={r.id}>
         <td className="mono">{r.name}</td>
         <td>{users.find((u) => u.id === r.userId)?.username ?? '—'}</td>
@@ -1517,12 +1816,16 @@ function AdminServers() {
         <td><span className={`badge badge-${r.status}`}>{r.status}</span></td>
         <td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><NavLink to={`/admin/servers/${r.id}`} className="btn btn-ghost btn-sm">Edit</NavLink>{r.status !== 'suspended' ? <button className="btn btn-ghost btn-sm" onClick={() => setStatus(r.id, 'suspended')}>Suspend</button> : <button className="btn btn-ghost btn-sm" onClick={() => setStatus(r.id, 'active')}>Unsuspend</button>}<button className="btn btn-ghost btn-sm" onClick={() => delServer(r.id)} title="Delete server"><FiTrash2 size={13} /></button></div></td>
       </tr>)}</tbody></table></div>
+      ) : (
+        <AdminServersVpsTab />
+      )}
     </div>
   );
 }
 
 function NodeEditorPage() {
   const { id } = useParams() as { id: string };
+  const dialog = useConfirm();
   const nodeId = Number(id);
   const nav = useNavigate();
   const [node, setNode] = React.useState<any>(null);
@@ -1569,7 +1872,7 @@ function NodeEditorPage() {
     setMsg('Node saved.'); setNode(j.data); load();
   }
   async function regen() {
-    if (!confirm('Regenerate the daemon token? Wings will stop accepting the old token until you update its config.')) return;
+    if (!await dialog.confirm({ title: 'Regenerate token', message: 'Regenerate the daemon token? Wings will stop accepting the old token until you update its config.', confirmLabel: 'Regenerate', danger: true })) return;
     setErr('');
     const res = await fetch(`/api/nodes/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ regenerateToken: true }) });
     const j = await res.json().catch(() => ({}));
@@ -1705,6 +2008,7 @@ function NewNodePage() {
 }
 
 function NodesPage() {
+  const dialog = useConfirm();
   const [rows, setRows] = React.useState<{ id: number; name: string; fqdn: string; scheme: string; daemonListen: number }[]>([]);
   const [health, setHealth] = React.useState<Record<number, { status: 'online' | 'error' | 'checking'; detail?: string }>>({});
   const [err, setErr] = React.useState('');
@@ -1731,10 +2035,10 @@ function NodesPage() {
   }, []);
   React.useEffect(() => { rows.forEach((n) => { if (!health[n.id]) checkHealth(n.id); }); }, [rows, health, checkHealth]);
   async function delNode(id: number) {
-    if (!confirm('Delete this node? This cannot be undone. Remove servers first.')) return;
+    if (!await dialog.confirm({ title: 'Delete node', message: 'Delete this node? This cannot be undone. Remove servers first.', confirmLabel: 'Delete', danger: true })) return;
     const r = await fetch(`/api/nodes/${id}`, { method: 'DELETE', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert(j.errors?.[0]?.detail || 'Failed'); return; }
+    if (!r.ok) { dialog.confirm({ title: 'Error', message: j.errors?.[0]?.detail || 'Failed', confirmLabel: 'OK' }); return; }
     load();
   }
   return (
@@ -1758,6 +2062,7 @@ function NodesPage() {
 }
 
 function EggsPage() {
+  const dialog = useConfirm();
   const nav = useNavigate();
   const [rows, setRows] = React.useState<{ id: number; name: string; author: string; dockerImage: string; description: string | null }[]>([]);
   const [mode, setMode] = React.useState<'import' | null>(null);
@@ -1780,7 +2085,7 @@ function EggsPage() {
     setMsg(`Imported “${j.data.name}”.`); setJson(''); setFile(null); setMode(null); load();
   }
   async function del(e: { id: number; name: string }) {
-    if (!confirm(`Delete egg “${e.name}”? This cannot be undone.`)) return;
+    if (!await dialog.confirm({ title: 'Delete egg', message: `Delete egg “${e.name}”? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
     const res = await fetch(`/api/eggs/${e.id}`, { method: 'DELETE', credentials: 'include' });
     const j = await res.json();
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
@@ -1804,6 +2109,7 @@ function EggsPage() {
 }
 
 function EggEditor() {
+  const dialog = useConfirm();
   const { id } = useParams();
   const editing = id !== undefined && id !== 'new';
   const eggId = Number(id);
@@ -1965,7 +2271,7 @@ function EggEditor() {
                 <td className="mono" style={{ fontSize: 12 }}>{v.env_variable}</td>
                 <td className="mono" style={{ fontSize: 12 }}>{v.default_value || '—'}</td>
                 <td>{v.user_editable ? 'Yes' : 'No'}</td>
-                <td style={{ whiteSpace: 'nowrap' }}><button type="button" className="btn btn-ghost btn-sm" onClick={() => setVarEdit(i)}>Edit</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => { if (confirm('Delete variable?')) setVars((p) => p.filter((_, j) => j !== i)); }}><FiTrash2 /></button></td>
+                <td style={{ whiteSpace: 'nowrap' }}><button type="button" className="btn btn-ghost btn-sm" onClick={() => setVarEdit(i)}>Edit</button><button type="button" className="btn btn-ghost btn-sm" onClick={async () => { if (await dialog.confirm({ title: 'Delete variable', message: 'Delete this variable?', confirmLabel: 'Delete', danger: true })) setVars((p) => p.filter((_, j) => j !== i)); }}><FiTrash2 /></button></td>
               </tr>
             ))}</tbody></table></div>
         </div>
@@ -2039,34 +2345,213 @@ function AuditPage() {
 }
 
 function ProxmoxPage() {
+  const nav = useNavigate();
+  const dialog = useConfirm();
   const [clusters, setClusters] = React.useState<{ id: number; name: string; host: string }[]>([]);
-  const [open, setOpen] = React.useState(false);
-  const [f, setF] = React.useState({ name: '', host: '', api_token_id: '', api_token_secret: '' });
-  const [err, setErr] = React.useState('');
+  const [health, setHealth] = React.useState<Record<number, { status: string }>>({});
   const load = React.useCallback(() => fetch('/api/proxmox/clusters', { credentials: 'include' }).then((r) => r.json()).then((j) => setClusters(j.data || [])), []);
   React.useEffect(() => { load(); }, [load]);
-  async function create(e: React.FormEvent) {
-    e.preventDefault(); setErr('');
-    const res = await fetch('/api/proxmox/clusters', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(f) });
-    const j = await res.json();
-    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
-    setF({ name: '', host: '', api_token_id: '', api_token_secret: '' }); setOpen(false); load();
+  React.useEffect(() => {
+    clusters.forEach((c) => {
+      fetch(`/api/proxmox/clusters/${c.id}`, { credentials: 'include' }).then((r) => r.json()).then((j) => setHealth((h) => ({ ...h, [c.id]: { status: j.data?.health?.status || 'unknown' } }))).catch(() => {});
+    });
+  }, [clusters]);
+  async function del(id: number) {
+    if (!await dialog.confirm({ title: 'Delete cluster', message: 'Delete this cluster? Unassign its VMs first. This cannot be undone.', confirmLabel: 'Delete', danger: true })) return;
+    const r = await fetch(`/api/proxmox/clusters/${id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { dialog.confirm({ title: 'Error', message: j.errors?.[0]?.detail || 'Failed', confirmLabel: 'OK' }); return; }
+    load();
   }
   return (
     <div className="page">
-      <div className="page-head"><div><h1 className="h1">Proxmox</h1></div><button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>New cluster</button></div>
-      <div className="table-wrap"><table className="table"><thead><tr><th>Cluster</th><th>Host</th></tr></thead><tbody>{clusters.length === 0 ? <tr><td colSpan={2} className="muted">No clusters.</td></tr> : clusters.map((c) => <tr key={c.id}><td>{c.name}</td><td className="mono muted" style={{ fontSize: 12 }}>{c.host}</td></tr>)}</tbody></table></div>
-      <Modal open={open} onClose={() => setOpen(false)} title="New Proxmox cluster" footer={<><button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button><button className="btn btn-primary" form="pve-form">Add cluster</button></>}>
-        <form id="pve-form" onSubmit={create} className="form">
+      <div className="page-head"><div><h1 className="h1">Proxmox</h1><p className="lede">Clusters and PVE hosts — full detail like Nodes.</p></div><NavLink to="/admin/proxmox/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New cluster</NavLink></div>
+      <div className="table-wrap"><table className="table"><thead><tr><th>Cluster</th><th>Host</th><th>Status</th><th></th></tr></thead><tbody>{clusters.length === 0 ? <tr><td colSpan={4} className="muted">No clusters yet.</td></tr> : clusters.map((c) => {
+        const h = health[c.id];
+        const dot = h?.status === 'online' ? '#22c55e' : h?.status === 'error' ? '#ef4444' : '#3a3a3e';
+        return <tr key={c.id}><td>{c.name}</td><td className="mono muted" style={{ fontSize: 12 }}>{c.host}</td><td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />{h?.status || 'checking'}</span></td><td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><NavLink to={`/admin/proxmox/${c.id}`} className="btn btn-ghost btn-sm">Edit</NavLink><button className="btn btn-ghost btn-sm" onClick={() => nav(`/admin/proxmox/${c.id}`)}>Manage</button><button className="btn btn-ghost btn-sm" title="Delete cluster" onClick={() => del(c.id)}><FiTrash2 size={13} /></button></div></td></tr>;
+      })}</tbody></table></div>
+    </div>
+  );
+}
+
+function NewProxmoxClusterPage() {
+  const nav = useNavigate();
+  const [f, setF] = React.useState({ name: '', host: 'https://', api_token_id: '', api_token_secret: '', verify_tls: false });
+  const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState('');
+  async function create(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setMsg('');
+    const res = await fetch('/api/proxmox/clusters', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, host: f.host, api_token_id: f.api_token_id, api_token_secret: f.api_token_secret, verify_tls: f.verify_tls }) });
+    const j = await res.json();
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    nav('/admin/proxmox');
+  }
+  return (
+    <div className="page" style={{ maxWidth: 720 }}>
+      <div className="page-head"><div><h1 className="h1">New Proxmox cluster</h1><p className="lede">Connect a PVE host. Like Nodes — host, token, TLS.</p></div><NavLink to="/admin/proxmox" className="btn btn-ghost btn-sm">Back</NavLink></div>
+      <Card title="Connection">
+        <form id="pve-new" onSubmit={create} className="form">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label className="field"><span className="label">Name</span><input id="pve-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="qyro-prod" /></label>
-            <label className="field"><span className="label">Host</span><input id="pve-host" className="input" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="https://pve.example" /></label>
+            <label className="field"><span className="label">Name</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="qyro-prod" required /></label>
+            <label className="field"><span className="label">Host</span><input className="input mono" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="https://pve.example:8006" required /></label>
           </div>
-          <label className="field"><span className="label">API token ID</span><input id="pve-tid" className="input mono" value={f.api_token_id} onChange={(e) => setF({ ...f, api_token_id: e.target.value })} placeholder="lunixpanel@pve!panel" /></label>
-          <label className="field"><span className="label">API token secret</span><input id="pve-sec" className="input mono" type="password" value={f.api_token_secret} onChange={(e) => setF({ ...f, api_token_secret: e.target.value })} /></label>
+          <label className="field"><span className="label">API token ID</span><input className="input mono" value={f.api_token_id} onChange={(e) => setF({ ...f, api_token_id: e.target.value })} placeholder="lunixpanel@pve!panel" required /></label>
+          <label className="field"><span className="label">API token secret</span><input className="input mono" type="password" value={f.api_token_secret} onChange={(e) => setF({ ...f, api_token_secret: e.target.value })} required /></label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={f.verify_tls} onChange={(e) => setF({ ...f, verify_tls: e.target.checked })} /> Verify TLS (uncheck for self-signed)</label>
           {err && <div className="alert alert-error" role="alert">{err}</div>}
+          {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+          <button className="btn btn-primary" type="submit">Create cluster</button>
         </form>
-      </Modal>
+      </Card>
+    </div>
+  );
+}
+
+function ClusterEditorPage() {
+  const { id } = useParams() as { id: string };
+  const nav = useNavigate();
+  const dialog = useConfirm();
+  const [cl, setCl] = React.useState<{ id: number; name: string; host: string; verifyTls: boolean; health?: { status: string; version?: string | null; detail?: string }; assignments_count?: number } | null>(null);
+  const [f, setF] = React.useState({ name: '', host: '', api_token_id: '', api_token_secret: '', verify_tls: false });
+  const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState(''); const [saving, setSaving] = React.useState(false);
+  const load = React.useCallback(() => fetch(`/api/proxmox/clusters/${id}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (!j.data) { setErr(j.errors?.[0]?.detail || 'Not found'); return; } setCl(j.data); setF({ name: j.data.name, host: j.data.host, api_token_id: j.data.apiTokenId || '', api_token_secret: '', verify_tls: !!j.data.verifyTls }); }), [id]);
+  React.useEffect(() => { load(); }, [load]);
+  async function save(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setMsg(''); setSaving(true);
+    const body: Record<string, unknown> = { name: f.name.trim(), host: f.host.trim(), verify_tls: f.verify_tls };
+    if (f.api_token_id.trim()) body.api_token_id = f.api_token_id.trim();
+    if (f.api_token_secret.trim()) body.api_token_secret = f.api_token_secret;
+    const r = await fetch(`/api/proxmox/clusters/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    setSaving(false);
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Save failed'); return; }
+    setMsg('Cluster saved.'); setCl(j.data); setF((p) => ({ ...p, api_token_secret: '' }));
+  }
+  async function del() {
+    if (!await dialog.confirm({ title: 'Delete cluster', message: 'Delete this cluster and its secret? Unassign VMs first.', confirmLabel: 'Delete', danger: true })) return;
+    const r = await fetch(`/api/proxmox/clusters/${id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    nav('/admin/proxmox');
+  }
+  if (!cl) return <div className="page"><div className="lede">Loading cluster…</div>{err && <div className="alert alert-error">{err}</div>}</div>;
+  return (
+    <div className="page" style={{ maxWidth: 760 }}>
+      <div className="page-head"><div><h1 className="h1">Proxmox · {cl.name}</h1><p className="lede">Full connection details — like Nodes/Eggs editors.</p></div><NavLink to="/admin/proxmox" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink></div>
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <Card title="Health">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 10, height: 10, borderRadius: 999, background: cl.health?.status === 'online' ? '#22c55e' : cl.health?.status === 'error' ? '#ef4444' : '#3a3a3e' }} /><span className="mono">{cl.health?.status === 'online' ? `Online${cl.health.version ? ` · v${cl.health.version}` : ''}` : cl.health?.status === 'error' ? `Error: ${cl.health.detail}` : 'Checking…'}</span></div>
+        <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Assignments: {cl.assignments_count ?? 0} · Host {cl.host}</div>
+      </Card>
+      <Card title="Connection">
+        <form onSubmit={save} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Name</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <label className="field"><span className="label">Host</span><input className="input mono" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="https://pve:8006" /></label>
+          </div>
+          <label className="field"><span className="label">API token ID</span><input className="input mono" value={f.api_token_id} onChange={(e) => setF({ ...f, api_token_id: e.target.value })} /></label>
+          <label className="field"><span className="label">API token secret (leave blank to keep)</span><input className="input mono" type="password" value={f.api_token_secret} onChange={(e) => setF({ ...f, api_token_secret: e.target.value })} placeholder="••••" /></label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={f.verify_tls} onChange={(e) => setF({ ...f, verify_tls: e.target.checked })} /> Verify TLS</label>
+          <div style={{ display: 'flex', gap: 8 }}><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save cluster'}</button><NavLink to="/admin/proxmox" className="btn btn-ghost">Clusters</NavLink></div>
+        </form>
+      </Card>
+      <Card title="Danger zone">
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Deleting removes the secret and assignment guard (must unassign VMs first).</p>
+        <button className="btn btn-danger" onClick={del}>Delete cluster</button>
+      </Card>
+    </div>
+  );
+}
+
+function NewVpsPage() {
+  const { clusterId } = useParams() as { clusterId: string };
+  const cid = parseInt(clusterId || '0', 10);
+  const nav = useNavigate();
+  const toast = useToast();
+  const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
+  const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
+  const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
+  const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
+  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ip: 'dhcp', gateway: '', nameserver: '', searchdomain: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
+  const [adv, setAdv] = React.useState(false);
+  const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => { fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data)).catch(() => {}); fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setNodes(j.data); if (j.data[0]?.node) setF((p) => ({ ...p, node: j.data[0].node })); } }).catch(() => {}); fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])).catch(() => {}); }, [cid]);
+  React.useEffect(() => {
+    if (!f.node) return;
+    fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }).catch(() => {});
+  }, [cid, f.node]);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setSaving(true);
+    const body: Record<string, unknown> = { node: f.node, type: f.type };
+    if (f.vmid) body.vmid = parseInt(f.vmid, 10);
+    if (f.hostname) body.hostname = f.hostname.trim();
+    if (f.cores) body.cores = parseInt(f.cores, 10);
+    if (f.sockets) body.sockets = parseInt(f.sockets, 10);
+    if (f.memory) body.memory = parseInt(f.memory, 10);
+    if (f.disk) body.disk = parseInt(f.disk, 10);
+    if (f.storage) body.storage = f.storage;
+    if (f.bridge) body.bridge = f.bridge;
+    if (f.vlan) body.vlan = parseInt(f.vlan, 10);
+    if (f.ip) body.ip = f.ip.trim();
+    if (f.gateway) body.gateway = f.gateway.trim();
+    if (f.nameserver) body.nameserver = f.nameserver.trim();
+    if (f.iso) body.iso = f.iso.trim();
+    if (f.ostemplate) body.ostemplate = f.ostemplate.trim();
+    if (f.sshkeys) body.sshkeys = f.sshkeys;
+    if (f.userId) body.userId = parseInt(f.userId, 10);
+    const r = await fetch(`/api/proxmox/clusters/${cid}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    setSaving(false);
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || String(j.message || 'Create failed')); return; }
+    toast?.show('VM creation started'); nav('/admin/servers');
+  }
+  return (
+    <div className="page" style={{ maxWidth: 780 }}>
+      <div className="page-head"><div><h1 className="h1">New VM / Container · {cluster?.name || `#${cid}`}</h1><p className="lede">Detailed like Servers/Nodes — hostname, resources, IP, storage.</p></div><NavLink to="/admin/servers" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back to servers</NavLink></div>
+      <Card title="Identity & owner">
+        <form id="vps-form" onSubmit={submit} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Hostname (FQDN)</span><input className="input mono" value={f.hostname} onChange={(e) => setF({ ...f, hostname: e.target.value })} placeholder="vm1.example.com" required /></label>
+            <label className="field"><span className="label">VMID (auto if empty)</span><input className="input mono" value={f.vmid} onChange={(e) => setF({ ...f, vmid: e.target.value })} placeholder="101" /></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Node</span><select className="input" value={f.node} onChange={(e) => setF({ ...f, node: e.target.value })} required><option value="">Choose node…</option>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
+            <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC</option></select></label>
+          </div>
+          <label className="field"><span className="label">Owner (auto-assign, optional)</span><select className="input" value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
+        </form>
+      </Card>
+      <Card title="Resources">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">vCPU cores</span><input className="input mono" value={f.cores} onChange={(e) => setF({ ...f, cores: e.target.value })} /></label>
+          <label className="field"><span className="label">Sockets</span><input className="input mono" value={f.sockets} onChange={(e) => setF({ ...f, sockets: e.target.value })} /></label>
+          <label className="field"><span className="label">RAM MB</span><input className="input mono" value={f.memory} onChange={(e) => setF({ ...f, memory: e.target.value })} /></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Disk GB</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
+          <label className="field"><span className="label">Storage</span><select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}><option value="">Choose…</option>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select></label>
+        </div>
+      </Card>
+      <Card title="Network — assign IP">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Bridge</span><input className="input mono" value={f.bridge} onChange={(e) => setF({ ...f, bridge: e.target.value })} placeholder="vmbr0" /></label>
+          <label className="field"><span className="label">VLAN (optional)</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="100" /></label>
+          <label className="field"><span className="label">IP</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="dhcp or 10.0.0.10/24" /></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
+          <label className="field"><span className="label">Nameserver (DNS)</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
+        </div>
+      </Card>
+      <Card title="OS / template">
+        {f.type === 'qemu' ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label> : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>}
+        <label className="field"><span className="label">SSH keys (optional)</span><textarea className="input mono textarea" rows={3} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdv(!adv)}>{adv ? 'Hide advanced' : 'Show advanced'}</button>
+        {adv && <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, marginTop: 10 }}><label className="field"><span className="label">Search domain</span><input className="input mono" value={f.searchdomain} onChange={(e) => setF({ ...f, searchdomain: e.target.value })} placeholder="example.com" /></label></div>}
+      </Card>
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <div><button className="btn btn-primary" form="vps-form" disabled={saving}>{saving ? 'Creating…' : 'Create VM'}</button></div>
     </div>
   );
 }
@@ -2081,6 +2566,7 @@ function AppInner() {
         <Route path="/" element={<RequireAuth><UserOverview /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
         <Route path="/server/:id" element={<RequireAuth><ServerManage /></RequireAuth>} />
+        <Route path="/vps/:id" element={<RequireAuth><VpsManage /></RequireAuth>} />
         <Route path="/account" element={<Navigate to="/settings" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -2098,6 +2584,9 @@ function AppInner() {
         <Route path="/admin/eggs/new" element={<RequireAuth adminOnly><EggEditor /></RequireAuth>} />
         <Route path="/admin/eggs/:id" element={<RequireAuth adminOnly><EggEditor /></RequireAuth>} />
         <Route path="/admin/proxmox" element={<RequireAuth adminOnly><ProxmoxPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/new" element={<RequireAuth adminOnly><NewProxmoxClusterPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/:id" element={<RequireAuth adminOnly><ClusterEditorPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/:clusterId/vms/new" element={<RequireAuth adminOnly><NewVpsPage /></RequireAuth>} />
         <Route path="/admin/audit" element={<RequireAuth adminOnly><AuditPage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -2109,7 +2598,11 @@ createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={qc}>
     <BrowserRouter>
       <AuthProvider>
-        <AppInner />
+        <ToastProvider>
+          <ConfirmProvider>
+            <AppInner />
+          </ConfirmProvider>
+        </ToastProvider>
       </AuthProvider>
     </BrowserRouter>
   </QueryClientProvider>,

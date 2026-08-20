@@ -500,6 +500,12 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "banner": {
+          "name": "banner",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1027,6 +1033,12 @@
         "description": {
           "name": "description",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "banner": {
+          "name": "banner",
+          "type": "varchar(2048)",
           "primaryKey": false,
           "notNull": false
         },

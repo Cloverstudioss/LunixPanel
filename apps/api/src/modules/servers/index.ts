@@ -64,12 +64,13 @@ export default function serverRoutes(db: Db) {
     return c.json({ data: rows.map((r) => ({ ...r, egg: eggMap.get(r.eggId) ? { id: eggMap.get(r.eggId)!.id, name: eggMap.get(r.eggId)!.name, banner: eggMap.get(r.eggId)!.banner, dockerImage: eggMap.get(r.eggId)!.dockerImage } : null })) });
   });
   app.post('/', requireAdmin, zJson(z.object({
-    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(), allocationLimit: z.number().int().min(0).max(100).default(1), backupLimit: z.number().int().min(0).max(100).default(0),
+    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(), allocationLimit: z.number().int().min(0).max(100).default(1), allocation_limit: z.number().int().min(0).max(100).optional(), backupLimit: z.number().int().min(0).max(100).default(0), backup_limit: z.number().int().min(0).max(100).optional(),
     memory: z.number().int().min(64).max(1_000_000), swap: z.number().int().min(-1).max(1_000_000).default(0), disk: z.number().int().min(256).max(10_000_000), io: z.number().int().min(10).max(1000).default(500), cpu: z.number().int().min(0).max(10000).default(100),
     threads: z.string().max(191).optional(), oom_disabled: z.boolean().optional(), description: z.string().max(1000).optional(),
     image: z.string().min(1).max(512), startup: z.string().max(2048).default(''), expires_at: z.string().datetime().nullable().optional(), env: z.record(z.string()).default({}),
   })), async (c) => {
-    const b = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; backupLimit: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
+    const raw = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; allocation_limit?: number; backupLimit: number; backup_limit?: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
+    const b = { ...raw, allocationLimit: raw.allocation_limit ?? raw.allocationLimit, backupLimit: raw.backup_limit ?? raw.backupLimit } as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; backupLimit: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
     const alloc = await db.select().from(schema.allocations).where(eq(schema.allocations.id, b.allocationId)).limit(1);
     if (!alloc[0] || alloc[0].nodeId !== b.nodeId) return c.json({ errors: [{ code: 'validation', detail: 'Allocation does not belong to node' }] }, 422);
     if (alloc[0].serverId) return c.json({ errors: [{ code: 'conflict', detail: 'Allocation already in use' }] }, 409);
@@ -116,7 +117,9 @@ export default function serverRoutes(db: Db) {
     eggId: z.number().int().optional(),
     allocationId: z.number().int().optional(),
     allocationLimit: z.number().int().min(0).max(100).optional(),
+    allocation_limit: z.number().int().min(0).max(100).optional(),
     backupLimit: z.number().int().min(0).max(100).optional(),
+    backup_limit: z.number().int().min(0).max(100).optional(),
     memory: z.number().int().min(64).max(1_000_000).optional(),
     swap: z.number().int().min(-1).max(1_000_000).optional(),
     disk: z.number().int().min(256).max(10_000_000).optional(),
@@ -130,7 +133,8 @@ export default function serverRoutes(db: Db) {
     expires_at: z.string().datetime().nullable().optional(),
   })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const b = c.req.valid('json' as never) as { name?: string; description?: string | null; userId?: number; nodeId?: number; eggId?: number; allocationId?: number; allocationLimit?: number; backupLimit?: number; memory?: number; swap?: number; disk?: number; io?: number; cpu?: number; threads?: string | null; oom_disabled?: boolean; image?: string; startup?: string; status?: string; expires_at?: string | null };
+    const raw = c.req.valid('json' as never) as { name?: string; description?: string | null; userId?: number; nodeId?: number; eggId?: number; allocationId?: number; allocationLimit?: number; allocation_limit?: number; backupLimit?: number; backup_limit?: number; memory?: number; swap?: number; disk?: number; io?: number; cpu?: number; threads?: string | null; oom_disabled?: boolean; image?: string; startup?: string; status?: string; expires_at?: string | null };
+    const b = { ...raw, allocationLimit: raw.allocation_limit ?? raw.allocationLimit, backupLimit: raw.backup_limit ?? raw.backupLimit } as { name?: string; description?: string | null; userId?: number; nodeId?: number; eggId?: number; allocationId?: number; allocationLimit?: number; backupLimit?: number; memory?: number; swap?: number; disk?: number; io?: number; cpu?: number; threads?: string | null; oom_disabled?: boolean; image?: string; startup?: string; status?: string; expires_at?: string | null };
     const rows = await db.select().from(schema.servers).where(eq(schema.servers.id, id)).limit(1);
     if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
     if (b.nodeId !== undefined || b.allocationId !== undefined) {
@@ -566,19 +570,24 @@ export default function serverRoutes(db: Db) {
     }
     return c.json({ data: { ok: true } });
   });
-  app.patch('/:id/settings', requireAuth, zJson(z.object({ name: z.string().min(1).max(191).optional(), description: z.string().max(1000).nullable().optional(), image: z.string().min(1).max(512).optional(), startup: z.string().max(2048).optional() })), async (c) => {
+  app.patch('/:id/settings', requireAuth, zJson(z.object({ name: z.string().min(1).max(191).optional(), description: z.string().max(1000).nullable().optional(), image: z.string().min(1).max(512).optional(), startup: z.string().max(2048).optional(), banner: z.string().max(2048).nullable().optional() })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
     const s = await loadServer(id);
     if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
     const auth = await requireOwner(c as never, s);
     if ('res' in auth) return auth.res;
     const u = auth.user;
-    const b = c.req.valid('json' as never) as { name?: string; description?: string | null; image?: string; startup?: string };
+    const b = c.req.valid('json' as never) as { name?: string; description?: string | null; image?: string; startup?: string; banner?: string | null };
     const update: Record<string, unknown> = {};
     if (b.name !== undefined) update.name = b.name.trim();
     if (b.description !== undefined) update.description = b.description;
     if (b.image !== undefined) update.image = b.image;
     if (b.startup !== undefined) update.startup = b.startup;
+    if (b.banner !== undefined) {
+      const v = b.banner?.trim() || null;
+      if (v && !/^https?:\/\/.+/i.test(v)) return c.json({ errors: [{ code: 'validation', detail: 'Banner must be a valid http(s) URL' }] }, 422);
+      update.banner = v;
+    }
     if (Object.keys(update).length === 0) return c.json({ errors: [{ code: 'validation', detail: 'No fields to update' }] }, 422);
     const [row] = await db.update(schema.servers).set(update).where(eq(schema.servers.id, id)).returning();
     return c.json({ data: row });

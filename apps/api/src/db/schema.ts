@@ -114,6 +114,7 @@ export const servers = pgTable('servers', {
   externalId: varchar('external_id', { length: 191 }),
   name: varchar('name', { length: 191 }).notNull(),
   description: text('description'),
+  banner: varchar('banner', { length: 2048 }),
   status: varchar('status', { length: 20 }).notNull().default('installing'),
   userId: integer('user_id').notNull().references(() => users.id),
   nodeId: integer('node_id').notNull().references(() => nodes.id),
@@ -177,6 +178,16 @@ export const proxmoxNodesCache = pgTable('proxmox_nodes_cache', {
   uptime: integer('uptime'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const proxmoxVmAssignments = pgTable('proxmox_vm_assignments', {
+  id: serial('id').primaryKey(),
+  clusterId: integer('cluster_id').notNull().references(() => proxmoxClusters.id, { onDelete: 'cascade' }),
+  node: varchar('node', { length: 191 }).notNull(),
+  type: varchar('type', { length: 10 }).notNull(),
+  vmid: integer('vmid').notNull(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('pve_assign_cluster_node_vmid_idx').on(t.clusterId, t.node, t.vmid)]);
 
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 191 }).primaryKey(),
