@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validator } from 'hono/validator';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import crypto from 'node:crypto';
 import * as schema from '../../db/schema.js';
 import type { Db } from '../../db/index.js';
@@ -64,12 +64,12 @@ export default function serverRoutes(db: Db) {
     return c.json({ data: rows.map((r) => ({ ...r, egg: eggMap.get(r.eggId) ? { id: eggMap.get(r.eggId)!.id, name: eggMap.get(r.eggId)!.name, banner: eggMap.get(r.eggId)!.banner, dockerImage: eggMap.get(r.eggId)!.dockerImage } : null })) });
   });
   app.post('/', requireAdmin, zJson(z.object({
-    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(), allocationLimit: z.number().int().min(0).max(100).default(1),
+    name: z.string().min(1).max(191), userId: z.number().int(), nodeId: z.number().int(), eggId: z.number().int(), allocationId: z.number().int(), allocationLimit: z.number().int().min(0).max(100).default(1), backupLimit: z.number().int().min(0).max(100).default(0),
     memory: z.number().int().min(64).max(1_000_000), swap: z.number().int().min(-1).max(1_000_000).default(0), disk: z.number().int().min(256).max(10_000_000), io: z.number().int().min(10).max(1000).default(500), cpu: z.number().int().min(0).max(10000).default(100),
     threads: z.string().max(191).optional(), oom_disabled: z.boolean().optional(), description: z.string().max(1000).optional(),
     image: z.string().min(1).max(512), startup: z.string().max(2048).default(''), expires_at: z.string().datetime().nullable().optional(), env: z.record(z.string()).default({}),
   })), async (c) => {
-    const b = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
+    const b = c.req.valid('json' as never) as { name: string; userId: number; nodeId: number; eggId: number; allocationId: number; allocationLimit: number; backupLimit: number; memory: number; swap: number; disk: number; io: number; cpu: number; threads?: string; oom_disabled?: boolean; description?: string; image: string; startup: string; expires_at?: string | null; env: Record<string, string> };
     const alloc = await db.select().from(schema.allocations).where(eq(schema.allocations.id, b.allocationId)).limit(1);
     if (!alloc[0] || alloc[0].nodeId !== b.nodeId) return c.json({ errors: [{ code: 'validation', detail: 'Allocation does not belong to node' }] }, 422);
     if (alloc[0].serverId) return c.json({ errors: [{ code: 'conflict', detail: 'Allocation already in use' }] }, 409);
@@ -82,7 +82,7 @@ export default function serverRoutes(db: Db) {
     const uuidShort = Math.random().toString(36).slice(2, 10);
     const expiresAt = b.expires_at ? new Date(b.expires_at) : null;
     const [row] = await db.insert(schema.servers).values({
-      uuidShort, name: b.name.trim(), userId: b.userId, nodeId: b.nodeId, eggId: b.eggId, allocationId: b.allocationId, memory: b.memory, swap: b.swap, disk: b.disk, io: b.io, cpu: b.cpu, threads: b.threads ?? null, oomDisabled: b.oom_disabled ?? false, description: b.description ?? null, image: b.image, startup: b.startup, expiresAt, status: 'active',
+      uuidShort, name: b.name.trim(), userId: b.userId, nodeId: b.nodeId, eggId: b.eggId, allocationId: b.allocationId, allocationLimit: b.allocationLimit, backupLimit: b.backupLimit, memory: b.memory, swap: b.swap, disk: b.disk, io: b.io, cpu: b.cpu, threads: b.threads ?? null, oomDisabled: b.oom_disabled ?? false, description: b.description ?? null, image: b.image, startup: b.startup, expiresAt, status: 'active',
     }).returning();
     await db.update(schema.allocations).set({ serverId: row.id }).where(eq(schema.allocations.id, b.allocationId));
     const vars = await db.select().from(schema.eggVariables).where(eq(schema.eggVariables.eggId, b.eggId));
@@ -115,6 +115,8 @@ export default function serverRoutes(db: Db) {
     nodeId: z.number().int().optional(),
     eggId: z.number().int().optional(),
     allocationId: z.number().int().optional(),
+    allocationLimit: z.number().int().min(0).max(100).optional(),
+    backupLimit: z.number().int().min(0).max(100).optional(),
     memory: z.number().int().min(64).max(1_000_000).optional(),
     swap: z.number().int().min(-1).max(1_000_000).optional(),
     disk: z.number().int().min(256).max(10_000_000).optional(),
@@ -128,7 +130,7 @@ export default function serverRoutes(db: Db) {
     expires_at: z.string().datetime().nullable().optional(),
   })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const b = c.req.valid('json' as never) as { name?: string; description?: string | null; userId?: number; nodeId?: number; eggId?: number; allocationId?: number; memory?: number; swap?: number; disk?: number; io?: number; cpu?: number; threads?: string | null; oom_disabled?: boolean; image?: string; startup?: string; status?: string; expires_at?: string | null };
+    const b = c.req.valid('json' as never) as { name?: string; description?: string | null; userId?: number; nodeId?: number; eggId?: number; allocationId?: number; allocationLimit?: number; backupLimit?: number; memory?: number; swap?: number; disk?: number; io?: number; cpu?: number; threads?: string | null; oom_disabled?: boolean; image?: string; startup?: string; status?: string; expires_at?: string | null };
     const rows = await db.select().from(schema.servers).where(eq(schema.servers.id, id)).limit(1);
     if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
     if (b.nodeId !== undefined || b.allocationId !== undefined) {
@@ -151,6 +153,8 @@ export default function serverRoutes(db: Db) {
       }
     }
     if (b.eggId !== undefined) update.eggId = b.eggId;
+    if (b.allocationLimit !== undefined) update.allocationLimit = b.allocationLimit;
+    if (b.backupLimit !== undefined) update.backupLimit = b.backupLimit;
     if (b.memory !== undefined) update.memory = b.memory;
     if (b.swap !== undefined) update.swap = b.swap;
     if (b.disk !== undefined) update.disk = b.disk;
@@ -301,6 +305,111 @@ export default function serverRoutes(db: Db) {
   app.post('/:id/files/copy', requireAuth, fileProxy('copy'));
   app.post('/:id/files/compress', requireAuth, fileProxy('compress'));
   app.post('/:id/files/decompress', requireAuth, fileProxy('decompress'));
+  app.get('/:id/backups', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const rows = await db.select().from(schema.backups).where(eq(schema.backups.serverId, id));
+    rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return c.json({ data: { backups: rows, limit: s.backupLimit } });
+  });
+  app.post('/:id/backups', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    const existing = await db.select().from(schema.backups).where(eq(schema.backups.serverId, id));
+    if (s.backupLimit !== 0 && existing.length >= s.backupLimit) return c.json({ errors: [{ code: 'limit', detail: `Backup limit reached (${s.backupLimit}).` }] }, 409);
+    const uuid = crypto.randomUUID();
+    const name = `backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+    const [row] = await db.insert(schema.backups).values({ uuid, serverId: id, name, status: 'running' }).returning();
+    try {
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/backup`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ adapter: 'wings', uuid, ignore: '' }) });
+      if (!r.ok) {
+        await db.update(schema.backups).set({ status: 'failed', completedAt: new Date() }).where(eq(schema.backups.id, row.id));
+        return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+      }
+    } catch (e) {
+      await db.update(schema.backups).set({ status: 'failed', completedAt: new Date() }).where(eq(schema.backups.id, row.id));
+      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+    }
+    const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await db.insert(schema.auditLogs).values({ userId: me.id, action: 'backup.created', targetType: 'server', targetId: String(id) });
+    return c.json({ data: { ...row, size: 0, status: 'running' } }, 202);
+  });
+  app.delete('/:id/backups/:bid', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const bid = c.req.param('bid') || '';
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    const rows = await db.select().from(schema.backups).where(and(eq(schema.backups.uuid, bid), eq(schema.backups.serverId, id))).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Backup not found' }] }, 404);
+    try {
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/backup/${bid}`, { method: 'DELETE', headers: { Authorization: `Bearer ${node.daemonToken}` } });
+      if (r.status !== 404 && !r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+    } catch { /* non-fatal, still remove the record */ }
+    await db.delete(schema.backups).where(and(eq(schema.backups.uuid, bid), eq(schema.backups.serverId, id)));
+    const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await db.insert(schema.auditLogs).values({ userId: me.id, action: 'backup.deleted', targetType: 'server', targetId: String(id) });
+    return c.json({ data: { ok: true } });
+  });
+  app.post('/:id/backups/:bid/restore', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const bid = c.req.param('bid') || '';
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    const rows = await db.select().from(schema.backups).where(and(eq(schema.backups.uuid, bid), eq(schema.backups.serverId, id))).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Backup not found' }] }, 404);
+    if (rows[0].status !== 'completed') return c.json({ errors: [{ code: 'validation', detail: 'Only completed backups can be restored.' }] }, 422);
+    await db.update(schema.servers).set({ status: 'restoring' }).where(eq(schema.servers.id, id));
+    try {
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/backup/${bid}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ adapter: 'wings', truncate_directory: true }) });
+      if (!r.ok) {
+        await db.update(schema.servers).set({ status: 'active' }).where(eq(schema.servers.id, id));
+        return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+      }
+    } catch (e) {
+      await db.update(schema.servers).set({ status: 'active' }).where(eq(schema.servers.id, id));
+      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+    }
+    const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await db.insert(schema.auditLogs).values({ userId: me.id, action: 'backup.restored', targetType: 'server', targetId: String(id) });
+    return c.json({ data: { ok: true } }, 202);
+  });
+  app.get('/:id/backups/:bid/download', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const bid = c.req.param('bid') || '';
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const u = auth.user;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    const rows = await db.select().from(schema.backups).where(and(eq(schema.backups.uuid, bid), eq(schema.backups.serverId, id))).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Backup not found' }] }, 404);
+    const panelUrl = (process.env.APP_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:25050').replace(/\/$/, '');
+    const conn = `${node.fqdn}:${node.daemonListen}`;
+    const now = Math.floor(Date.now() / 1000);
+    const token = signJwt(node.daemonToken, {
+      iss: panelUrl, aud: [conn], exp: now + 900, jti: crypto.createHash('sha256').update(`${u.id}${s.uuid}${bid}`).digest('hex'),
+      scope: 'backup-download', user_uuid: u.uuid, server_uuid: s.uuid, backup_uuid: bid, unique_id: crypto.randomUUID(),
+    });
+    return c.json({ data: { url: `${wingsUrl(node)}/download/backup?token=${token}` } });
+  });
   app.get('/:id/allocations', requireAuth, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
     const s = await loadServer(id);

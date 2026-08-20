@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, boolean, timestamp, integer, jsonb, index, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, text, boolean, timestamp, integer, jsonb, index, uuid, bigint } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -17,18 +17,6 @@ export const users = pgTable('users', {
   createdByAdminId: integer('created_by_admin_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('users_email_idx').on(t.email), index('users_expires_idx').on(t.expiresAt)]);
-
-export const accountRequests = pgTable('account_requests', {
-  id: serial('id').primaryKey(),
-  name: varchar('name', { length: 191 }).notNull(),
-  email: varchar('email', { length: 191 }).notNull(),
-  company: varchar('company', { length: 191 }),
-  reason: text('reason'),
-  status: varchar('status', { length: 20 }).notNull().default('pending'),
-  reviewedBy: integer('reviewed_by'),
-  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('ar_status_idx').on(t.status), index('ar_email_idx').on(t.email)]);
 
 export const sessions = pgTable('sessions', {
   id: varchar('id', { length: 64 }).primaryKey(),
@@ -144,6 +132,8 @@ export const servers = pgTable('servers', {
   image: varchar('image', { length: 512 }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
   graceUntil: timestamp('grace_until', { withTimezone: true }),
+  suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+  suspendedReason: varchar('suspended_reason', { length: 255 }),
   installedAt: timestamp('installed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('servers_user_idx').on(t.userId), index('servers_node_idx').on(t.nodeId)]);

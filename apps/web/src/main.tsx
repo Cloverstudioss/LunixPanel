@@ -130,7 +130,7 @@ function AdminSidebar() {
       <PanelSwitch />
       <div className="sidebar-section">
         <div className="sidebar-heading">Manage</div>
-        {L('/admin', 'Overview', FiGrid)}{L('/admin/requests', 'Requests', FiInbox)}{L('/admin/users', 'Users', FiUsers)}{L('/admin/servers', 'Servers', FiServer)}
+        {L('/admin', 'Overview', FiGrid)}{L('/admin/users', 'Users', FiUsers)}{L('/admin/servers', 'Servers', FiServer)}
       </div>
       <div className="sidebar-heading">Infrastructure</div>
       <div className="sidebar-section" style={{ gap: 4 }}>
@@ -218,11 +218,11 @@ function NodeAllocationsPage() {
 
 function Shell({ children, me, onLogout }: { children: React.ReactNode; me: Me; onLogout: () => void }) {
   const loc = useLocation();
-  const isAuth = loc.pathname === '/login' || loc.pathname === '/request-access';
+  const isAuth = loc.pathname === '/login' || loc.pathname === '/register';
   if (isAuth) return <>{children}</>;
   const isAdmin = loc.pathname.startsWith('/admin');
   const mLinks = isAdmin
-    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/requests', label: 'Requests' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }]
+    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }]
     : [{ to: '/', label: 'Overview' }, { to: '/settings', label: 'Settings' }];
   return (
     <div className="shell">
@@ -315,28 +315,29 @@ function LoginPage() {
             {err && <div className="alert alert-error" role="alert">{err}</div>}
             <button type="submit" className="btn btn-primary btn-block" disabled={loading}>{loading ? 'Signing in…' : need2fa ? 'Verify' : 'Sign in'}</button>
           </form>
-          <div style={{ marginTop: 10, textAlign: 'center' }}><NavLink to="/request-access" className="link">Need access? Request it</NavLink></div>
+          <div style={{ marginTop: 10, textAlign: 'center' }}><NavLink to="/register" className="link">New here? Create an account</NavLink></div>
         </div>
       </div>
     </div>
   );
 }
 
-function RequestAccessPage() {
-  const [form, setForm] = React.useState({ name: '', email: '', reason: '' });
+function RegisterPage() {
+  const [form, setForm] = React.useState({ username: '', email: '', password: '' });
   const [done, setDone] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setLoading(true);
     try {
-      const res = await fetch('/api/account-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const res = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
       const j = await res.json();
       if (!res.ok) throw new Error(j.errors?.[0]?.detail || 'Failed');
       setDone(true);
+      setTimeout(() => { window.location.href = '/'; }, 800);
     } catch (e) { setErr(String((e as Error).message)); } finally { setLoading(false); }
   }
-  if (done) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 16, background: 'var(--bg)' }}><div style={{ width: '100%', maxWidth: 360 }}><div className="auth-card"><h1 className="h2" style={{ margin: 0 }}>Request sent</h1><p className="muted" style={{ lineHeight: 1.6, fontSize: 13, marginTop: 8 }}>An admin will review it and create your account.</p><NavLink to="/login" className="btn btn-primary" style={{ marginTop: 12 }}>Back to login</NavLink></div></div></div>;
+  if (done) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 16, background: 'var(--bg)' }}><div style={{ width: '100%', maxWidth: 360 }}><div className="auth-card"><h1 className="h2" style={{ margin: 0 }}>Account created</h1><p className="muted" style={{ lineHeight: 1.6, fontSize: 13, marginTop: 8 }}>You're signed in. Redirecting…</p></div></div></div>;
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 16, background: 'var(--bg)' }}>
       <div style={{ width: '100%', maxWidth: 360, display: 'grid', gap: 14 }}>
@@ -345,13 +346,13 @@ function RequestAccessPage() {
           <div style={{ lineHeight: 1, textAlign: 'left' }}><div style={{ fontWeight: 800, fontSize: 14, letterSpacing: '-0.03em' }}>{BRAND.vendor} · {BRAND.panel}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>Game & VPS hosting</div></div>
         </div>
         <div className="auth-card">
-          <h1 className="h2" style={{ margin: 0 }}>Request access</h1>
+          <h1 className="h2" style={{ margin: 0 }}>Create account</h1>
           <form onSubmit={submit} className="form" style={{ marginTop: 14 }}>
-            <label className="field"><span className="label">Full name</span><input id="ra-name" className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ava Stone" /></label>
-            <label className="field"><span className="label">Email</span><input id="ra-email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ava@example.com" /></label>
-            <label className="field"><span className="label">Need</span><textarea id="ra-need" className="input textarea" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="What do you need?" rows={3} /></label>
+            <label className="field"><span className="label">Username</span><input id="reg-user" className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="ava_stone" autoComplete="off" /></label>
+            <label className="field"><span className="label">Email</span><input id="reg-email" className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ava@example.com" autoComplete="off" /></label>
+            <label className="field"><span className="label">Password</span><input id="reg-pass" className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 8 characters" autoComplete="off" /></label>
             {err && <div className="alert alert-error" role="alert">{err}</div>}
-            <button type="submit" className="btn btn-primary btn-block" disabled={loading}>{loading ? 'Submitting…' : 'Submit request'}</button>
+            <button type="submit" className="btn btn-primary btn-block" disabled={loading}>{loading ? 'Creating…' : 'Create account'}</button>
           </form>
           <div style={{ marginTop: 10, textAlign: 'center' }}><NavLink to="/login" className="link">Have an account? Sign in</NavLink></div>
         </div>
@@ -460,6 +461,7 @@ function ServerManage() {
   const tabs = [
     { key: 'console', label: 'Console', Icon: FiTerminal },
     { key: 'files', label: 'Files', Icon: FiFolder },
+    { key: 'backups', label: 'Backups', Icon: FiDatabase },
     { key: 'allocations', label: 'Allocations', Icon: FiGlobe },
     { key: 'startup', label: 'Startup', Icon: FiCpu },
     { key: 'settings', label: 'Settings', Icon: FiSettings },
@@ -470,6 +472,7 @@ function ServerManage() {
       <div className="tabs">{tabs.map((t) => <button key={t.key} className={`tab ${tab === t.key ? 'tab-active' : ''}`} onClick={() => setTab(t.key)}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><t.Icon size={13} />{t.label}</span></button>)}</div>
       {tab === 'console' && <ConsoleTab id={sid} />}
       {tab === 'files' && <FilesTab id={sid} />}
+      {tab === 'backups' && <BackupsTab id={sid} />}
       {tab === 'allocations' && <AllocationsTab id={sid} srv={srv} />}
       {tab === 'startup' && <StartupTab id={sid} />}
       {tab === 'settings' && <SettingsTab id={sid} srv={srv} onSaved={(d) => setSrv((p) => (p ? { ...p, ...d } : p))} />}
@@ -772,34 +775,107 @@ function FilesTab({ id }: { id: number }) {
   );
 }
 
+function BackupsTab({ id }: { id: number }) {
+  const [backups, setBackups] = React.useState<{ uuid: string; name: string; size: number; status: string; createdAt: string; completedAt: string | null }[]>([]);
+  const [limit, setLimit] = React.useState(0);
+  const [busy, setBusy] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const load = React.useCallback(() => {
+    fetch(`/api/servers/${id}/backups`, { credentials: 'include' }).then((r) => r.json()).then((j) => { setBackups(j.data?.backups || []); setLimit(j.data?.limit ?? 0); });
+  }, [id]);
+  React.useEffect(() => { load(); }, [load]);
+  async function create() {
+    setBusy('new'); setErr(''); setMsg('');
+    const r = await fetch(`/api/servers/${id}/backups`, { method: 'POST', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to create backup'); } else { setMsg('Backup started.'); }
+    setBusy(''); load();
+  }
+  async function restore(uuid: string) {
+    if (!confirm('Restore this backup? This will overwrite the current server files and stop the server.')) return;
+    setBusy(uuid); setErr(''); setMsg('');
+    const r = await fetch(`/api/servers/${id}/backups/${uuid}/restore`, { method: 'POST', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to restore'); } else setMsg('Restore started.');
+    setBusy(''); load();
+  }
+  async function remove(uuid: string) {
+    if (!confirm('Delete this backup?')) return;
+    setBusy(uuid); setErr(''); setMsg('');
+    const r = await fetch(`/api/servers/${id}/backups/${uuid}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to delete'); } else setMsg('Backup deleted.');
+    setBusy(''); load();
+  }
+  async function download(uuid: string) {
+    setErr(''); setMsg('');
+    const r = await fetch(`/api/servers/${id}/backups/${uuid}/download`, { credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.data?.url) { setErr(j.errors?.[0]?.detail || 'Failed to get download link'); return; }
+    window.open(j.data.url, '_blank');
+  }
+  function fmt(n: number) { if (!n) return '0 B'; if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`; return `${(n / 1048576).toFixed(1)} MB`; }
+  const canAdd = limit === 0 || backups.length < limit;
+  return (
+    <div className="stack">
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error">{err}</div>}
+      <Card title={`Backups (${backups.length}${limit > 0 ? ` / ${limit}` : ''})`} action={<button className="btn btn-primary btn-sm" disabled={busy === 'new' || !canAdd} onClick={create}><FiPlus size={13} /> {busy === 'new' ? 'Starting...' : 'Create'}</button>}>
+        {backups.length === 0 ? <p className="muted">No backups yet. Click Create to make one.</p> : (
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th>Name</th><th style={{ width: 90 }}>Size</th><th style={{ width: 110 }}>Status</th><th style={{ width: 170 }}>Created</th><th style={{ width: 130 }} className="right">Actions</th></tr></thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr key={b.uuid}>
+                  <td><span className="fname-inner"><FiDatabase size={14} style={{ color: 'var(--muted-2)', flexShrink: 0 }} /><span className="fname-text">{b.name}</span></span></td>
+                  <td className="mono muted" style={{ fontSize: 12 }}>{fmt(b.size)}</td>
+                  <td>{b.status === 'completed' ? <span className="badge badge-active">Completed</span> : b.status === 'failed' ? <span className="badge" style={{ color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' }}>Failed</span> : <span className="badge" style={{ color: '#facc15', borderColor: 'rgba(250,204,21,0.3)' }}>Running</span>}</td>
+                  <td className="mono muted" style={{ fontSize: 11 }}>{new Date(b.createdAt).toLocaleString()}</td>
+                  <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                    {b.status === 'completed' && <button className="btn btn-ghost btn-sm" disabled={busy === b.uuid} onClick={() => download(b.uuid)} title="Download"><FiDownload size={12} /></button>}
+                    {b.status === 'completed' && <button className="btn btn-ghost btn-sm" disabled={busy === b.uuid} onClick={() => restore(b.uuid)} title="Restore"><FiRotateCcw size={12} /></button>}
+                    <button className="btn btn-ghost btn-sm" disabled={busy === b.uuid} onClick={() => remove(b.uuid)} title="Delete" style={{ color: '#f87171' }}><FiTrash2 size={12} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function AllocationsTab({ id, srv }: { id: number; srv: { allocation: { id: number; ip: string; port: number } | null; node: { name: string; scheme: string; fqdn: string; daemonListen: number } | null } }) {
-  const [data, setData] = React.useState<{ primary_id: number | null; assigned: { id: number; ip: string; port: number; alias?: string | null }[]; free: { id: number; ip: string; port: number; alias?: string | null }[] } | null>(null);
-  const [busy, setBusy] = React.useState(0);
+  const [data, setData] = React.useState<{ primary_id: number | null; assigned: { id: number; ip: string; port: number; alias?: string | null }[]; limit: number; can_add: boolean; free_count: number } | null>(null);
+  const [busy, setBusy] = React.useState('');
   const [msg, setMsg] = React.useState('');
   const [err, setErr] = React.useState('');
   const load = React.useCallback(() => {
     fetch(`/api/servers/${id}/allocations`, { credentials: 'include' }).then((r) => r.json()).then((j) => setData(j.data || null));
   }, [id]);
   React.useEffect(() => { load(); }, [load]);
-  async function assign(aid: number) {
-    setBusy(aid); setErr(''); setMsg('');
-    const r = await fetch(`/api/servers/${id}/allocations`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allocation_id: aid }) });
+  async function assign() {
+    setBusy('add'); setErr(''); setMsg('');
+    const r = await fetch(`/api/servers/${id}/allocations`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to assign'); } else setMsg('Allocation added.');
-    setBusy(0); load();
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to add allocation'); } else setMsg(`Added ${j.data?.allocation?.ip}:${j.data?.allocation?.port}.`);
+    setBusy(''); load();
   }
   async function remove(aid: number) {
-    setBusy(aid); setErr(''); setMsg('');
+    setBusy(String(aid)); setErr(''); setMsg('');
     const r = await fetch(`/api/servers/${id}/allocations/${aid}`, { method: 'DELETE', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to remove'); } else setMsg('Allocation removed.');
-    setBusy(0); load();
+    setBusy(''); load();
   }
+  const atLimit = data ? data.limit !== 0 && data.assigned.length >= data.limit : true;
   return (
     <div className="stack">
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
-      <Card title={`Allocations (${data?.assigned.length ?? 0})`}>
+      <Card title={`Allocations (${data?.assigned.length ?? 0}${data && data.limit !== 0 ? ` / ${data.limit}` : ''})`} action={<button className="btn btn-primary btn-sm" disabled={busy === 'add' || atLimit || (data ? !data.can_add : true)} onClick={assign}><FiPlus size={13} /> {busy === 'add' ? 'Adding…' : 'Add allocation'}</button>}>
         {data && data.assigned.map((a) => (
           <div key={a.id} className="alloc-row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -807,23 +883,12 @@ function AllocationsTab({ id, srv }: { id: number; srv: { allocation: { id: numb
               {a.alias && <span className="badge badge-active" style={{ fontStyle: 'italic' }}>{a.alias}</span>}
               {a.id === data.primary_id && <span className="badge badge-active">Primary</span>}
             </div>
-            <button className="btn btn-ghost btn-sm" disabled={busy === a.id || a.id === data.primary_id} onClick={() => remove(a.id)} style={a.id === data.primary_id ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}><FiTrash2 size={13} /> Remove</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy === String(a.id) || a.id === data.primary_id} onClick={() => remove(a.id)} style={a.id === data.primary_id ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}><FiTrash2 size={13} /> Remove</button>
           </div>
         ))}
         {(!data || data.assigned.length === 0) && <p className="muted">No allocations assigned.</p>}
       </Card>
-      {data && data.free.length > 0 && (
-        <Card title="Add allocation">
-          <div className="file-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))' }}>
-            {data.free.map((a) => (
-              <button key={a.id} className="file-item" disabled={busy === a.id} onClick={() => assign(a.id)}>
-                <span className="mono" style={{ fontSize: 13 }}>{a.ip}:{a.port}</span>
-                {a.alias && <span className="muted" style={{ fontSize: 11, display: 'block', fontStyle: 'italic' }}>{a.alias}</span>}
-              </button>
-            ))}
-          </div>
-        </Card>
-      )}
+      {data && data.free_count === 0 && <div className="alert">No free ports left on this node.</div>}
       <Card title="Node">
         {srv.node ? (
           <p className="mono muted" style={{ margin: 0 }}>{srv.node.name} · {srv.node.scheme}://{srv.node.fqdn}:{srv.node.daemonListen}</p>
@@ -946,11 +1011,7 @@ function SettingsPage() {
   const [me, setMe] = React.useState<{ email: string; username: string; status: string; expiresAt: string | null } | null>(null);
   const [pw, setPw] = React.useState({ current: '', next: '', confirm: '' });
   const [msg, setMsg] = React.useState(''); const [err, setErr] = React.useState('');
-  const [settings, setSettings] = React.useState<Record<string, string> | null>(null);
-  const [saving, setSaving] = React.useState(false);
-  const [sMsg, setSMsg] = React.useState('');
   React.useEffect(() => { fetch('/api/me', { credentials: 'include' }).then((r) => r.json()).then((j) => setMe(j.data || null)); }, []);
-  React.useEffect(() => { fetch('/api/settings', { credentials: 'include' }).then((r) => r.json()).then((j) => setSettings(j.data || null)).catch(() => setSettings({})); }, []);
   async function changePw(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setMsg('');
     if (pw.next !== pw.confirm) { setErr('Passwords do not match'); return; }
@@ -959,19 +1020,7 @@ function SettingsPage() {
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
     setMsg('Password updated — sign in again.'); setPw({ current: '', next: '', confirm: '' });
   }
-  async function saveSettings(e: React.FormEvent) {
-    e.preventDefault(); setSaving(true); setSMsg('');
-    const res = await fetch('/api/settings', { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) setSMsg(j.errors?.[0]?.detail || 'Failed to save');
-    else setSMsg('Saved');
-    setSaving(false);
-  }
   if (!me) return <div className="page"><Skeleton lines={3} /></div>;
-  const envHint: Record<string, string> = {
-    panel_name: 'APP_NAME', company: 'APP_VENDOR', studio: 'APP_STUDIO', grace_days: 'GRACE_DAYS',
-    app_url: 'APP_URL', cors_origin: 'CORS_ORIGIN',
-  };
   return (
     <div className="page" style={{ maxWidth: 640, gap: 16 }}>
       <h1 className="h1">Settings</h1>
@@ -1009,21 +1058,42 @@ function SettingsPage() {
           </div>
         </div>
       </Card>
-      <Card title="Panel settings">
-        {!settings ? <Skeleton lines={3} /> : (
-          <form onSubmit={saveSettings} className="form" style={{ marginTop: 0 }}>
-            {Object.entries(settings).length === 0 ? <p className="muted" style={{ fontSize: 13, margin: 0 }}>No editable settings yet — add keys to <span className="mono">settings</span> table or expose more .env keys.</p> : Object.entries(settings).map(([k, v]) => (
-              <label key={k} className="field">
-                <span className="label">{k} <span className="mono muted" style={{ fontWeight: 400, fontSize: 11 }}>· {envHint[k] || k}</span></span>
-                <input className="input" value={v} onChange={(e) => setSettings({ ...settings, [k]: e.target.value })} />
-              </label>
-            ))}
-            {sMsg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{sMsg}</div>}
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
-          </form>
-        )}
-      </Card>
     </div>
+  );
+}
+
+function PanelSettingsCard() {
+  const [settings, setSettings] = React.useState<Record<string, string> | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [sMsg, setSMsg] = React.useState('');
+  React.useEffect(() => { fetch('/api/settings', { credentials: 'include' }).then((r) => r.json()).then((j) => setSettings(j.data || null)).catch(() => setSettings({})); }, []);
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault(); setSaving(true); setSMsg('');
+    const res = await fetch('/api/settings', { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) setSMsg(j.errors?.[0]?.detail || 'Failed to save');
+    else setSMsg('Saved');
+    setSaving(false);
+  }
+  const envHint: Record<string, string> = {
+    panel_name: 'APP_NAME', company: 'APP_VENDOR', studio: 'APP_STUDIO', grace_days: 'GRACE_DAYS',
+    app_url: 'APP_URL', cors_origin: 'CORS_ORIGIN',
+  };
+  return (
+    <Card title="Panel settings">
+      {!settings ? <Skeleton lines={3} /> : (
+        <form onSubmit={saveSettings} className="form" style={{ marginTop: 0 }}>
+          {Object.entries(settings).length === 0 ? <p className="muted" style={{ fontSize: 13, margin: 0 }}>No editable settings yet — add keys to <span className="mono">settings</span> table or expose more .env keys.</p> : Object.entries(settings).map(([k, v]) => (
+            <label key={k} className="field">
+              <span className="label">{k} <span className="mono muted" style={{ fontWeight: 400, fontSize: 11 }}>· {envHint[k] || k}</span></span>
+              <input className="input" value={v} onChange={(e) => setSettings({ ...settings, [k]: e.target.value })} />
+            </label>
+          ))}
+          {sMsg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{sMsg}</div>}
+          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -1062,87 +1132,52 @@ function TwoFactorCard() {
 
 // ── Admin ──
 function AdminOverview() {
-  const [c, setC] = React.useState({ users: '—', servers: '—', pending: '—', nodes: '—' });
+  const [c, setC] = React.useState({ users: '—', servers: '—', nodes: '—' });
   React.useEffect(() => {
     Promise.all([
       fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
       fetch('/api/servers', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
-      fetch('/api/account-requests', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
       fetch('/api/nodes', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ data: [] })),
-    ]).then(([u, s, rq, n]) => setC({ users: String(u.data?.length ?? 0), servers: String(s.data?.length ?? 0), pending: String(rq.data?.filter((x: { status: string }) => x.status === 'pending').length ?? 0), nodes: String(n.data?.length ?? 0) }));
+    ]).then(([u, s, n]) => setC({ users: String(u.data?.length ?? 0), servers: String(s.data?.length ?? 0), nodes: String(n.data?.length ?? 0) }));
   }, []);
   return (
     <div className="page">
       <h1 className="h1">Admin</h1>
       <div className="kpi-grid">
-        <div className="kpi kpi--primary"><div className="kpi-label">Pending</div><div className="kpi-value">{c.pending}</div><div className="kpi-meta">Requests to review</div></div>
-        <div className="kpi kpi--primary"><div className="kpi-label">Users</div><div className="kpi-value">{c.users}</div><div className="kpi-meta">Paid accounts</div></div>
+        <div className="kpi kpi--primary"><div className="kpi-label">Users</div><div className="kpi-value">{c.users}</div><div className="kpi-meta">Accounts</div></div>
         <div className="kpi"><div className="kpi-label">Servers</div><div className="kpi-value">{c.servers}</div><div className="kpi-meta">Game · VPS</div></div>
       </div>
       <div className="meta-row"><span>Nodes: {c.nodes} · Wings</span></div>
       <Card title="Go to">
         <div className="stack">
-          <NavLink to="/admin/requests" className="row-link"><span className="row-link-title">Requests</span><span className="row-link-meta">Approve with expiry</span></NavLink>
           <NavLink to="/admin/users" className="row-link"><span className="row-link-title">Users</span><span className="row-link-meta">Create and suspend</span></NavLink>
           <NavLink to="/admin/servers" className="row-link"><span className="row-link-title">Servers</span><span className="row-link-meta">Assign with resources</span></NavLink>
         </div>
       </Card>
-    </div>
-  );
-}
-
-function RequestsAdmin() {
-  const [rows, setRows] = React.useState<{ id: number; name: string; email: string; reason: string; status: string }[]>([]);
-  const [open, setOpen] = React.useState<number | null>(null);
-  const [form, setForm] = React.useState({ username: '', password: '', expires_at: '' });
-  const [err, setErr] = React.useState('');
-  const load = React.useCallback(() => fetch('/api/account-requests', { credentials: 'include' }).then((r) => r.json()).then((j) => setRows(j.data || [])), []);
-  React.useEffect(() => { load(); }, [load]);
-  async function approve(e: React.FormEvent) {
-    e.preventDefault(); setErr('');
-    if (open == null) return;
-    const res = await fetch(`/api/account-requests/${open}/approve`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.username, password: form.password, expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null }) });
-    const j = await res.json();
-    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
-    setOpen(null); setForm({ username: '', password: '', expires_at: '' }); load();
-  }
-  async function reject(id: number) { await fetch(`/api/account-requests/${id}/reject`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }); load(); }
-  const pending = rows.filter((r) => r.status === 'pending').length;
-  return (
-    <div className="page">
-      <div className="page-head"><div><h1 className="h1">Requests</h1></div><span className="pill">{pending} pending</span></div>
-      <div className="table-wrap"><table className="table"><thead><tr><th>Name</th><th>Email</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={5} className="muted">No requests.</td></tr> : rows.map((r) => <tr key={r.id}><td>{r.name}</td><td className="mono" style={{ fontSize: 12 }}>{r.email}</td><td className="muted" style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.reason || '—'}</td><td><span className={`badge badge-${r.status}`}>{r.status}</span></td><td>{r.status === 'pending' ? <><button className="btn btn-primary btn-sm" onClick={() => setOpen(r.id)}>Approve</button> <button className="btn btn-ghost btn-sm" onClick={() => reject(r.id)}>Reject</button></> : '—'}</td></tr>)}</tbody></table></div>
-      <Modal open={open != null} onClose={() => setOpen(null)} title={`Approve request #${open ?? ''}`} footer={<><button className="btn btn-ghost" onClick={() => setOpen(null)}>Cancel</button><button className="btn btn-primary" onClick={approve as unknown as () => void}>Create user</button></>}>
-        <form onSubmit={approve} className="form" id="approve-form">
-          <label className="field"><span className="label">Username</span><input id="ap-user" className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="ava_stone" /></label>
-          <label className="field"><span className="label">Temporary password</span><input id="ap-pass" className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 8 characters" /></label>
-          <label className="field"><span className="label">Expires at</span><input id="ap-exp" className="input" type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} /></label>
-          {err && <div className="alert alert-error" role="alert">{err}</div>}
-        </form>
-      </Modal>
+      <PanelSettingsCard />
     </div>
   );
 }
 
 function UsersAdmin() {
-  const [rows, setRows] = React.useState<{ id: number; username: string; email: string; status: string; isAdmin: boolean; expiresAt: string | null }[]>([]);
+  const [rows, setRows] = React.useState<{ id: number; username: string; email: string; status: string; isAdmin: boolean }[]>([]);
   const [open, setOpen] = React.useState(false);
-  const [edit, setEdit] = React.useState<{ id: number; username: string; email: string; expires_at: string; is_admin: boolean; status: string } | null>(null);
-  const [f, setF] = React.useState({ username: '', email: '', password: '', expires_at: '', is_admin: false });
+  const [edit, setEdit] = React.useState<{ id: number; username: string; email: string; is_admin: boolean; status: string } | null>(null);
+  const [f, setF] = React.useState({ username: '', email: '', password: '', is_admin: false });
   const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState('');
   const load = React.useCallback(() => fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setRows(j.data || [])), []);
   React.useEffect(() => { load(); }, [load]);
   async function create(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setMsg('');
-    const res = await fetch('/api/users', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: f.username, email: f.email, password: f.password, expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : null, is_admin: f.is_admin }) });
+    const res = await fetch('/api/users', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: f.username, email: f.email, password: f.password, is_admin: f.is_admin }) });
     const j = await res.json();
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
-    setMsg(`Created ${j.data.email}`); setF({ username: '', email: '', password: '', expires_at: '', is_admin: false }); setOpen(false); load();
+    setMsg(`Created ${j.data.email}`); setF({ username: '', email: '', password: '', is_admin: false }); setOpen(false); load();
   }
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault(); setErr('');
     if (!edit) return;
-    const res = await fetch(`/api/users/${edit.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: edit.username, email: edit.email, expires_at: edit.expires_at ? new Date(edit.expires_at).toISOString() : null, is_admin: edit.is_admin, status: edit.status }) });
+    const res = await fetch(`/api/users/${edit.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: edit.username, email: edit.email, is_admin: edit.is_admin, status: edit.status }) });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed to save'); return; }
     setEdit(null); load();
@@ -1155,17 +1190,14 @@ function UsersAdmin() {
     <div className="page">
       <div className="page-head"><div><h1 className="h1">Users</h1></div><button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>New user</button></div>
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
-      <div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Email</th><th>Status</th><th>Expires</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={5} className="muted">No users.</td></tr> : rows.map((u) => <tr key={u.id}><td>{u.username} {u.isAdmin && <span className="badge badge-admin">admin</span>}</td><td className="mono" style={{ fontSize: 12 }}>{u.email}</td><td><span className={`badge badge-${u.status}`}>{u.status}</span></td><td className="mono muted" style={{ fontSize: 12 }}>{u.expiresAt ? new Date(u.expiresAt).toLocaleDateString() : '—'}</td><td><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-ghost btn-sm" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, expires_at: u.expiresAt ? new Date(u.expiresAt).toISOString().slice(0, 16) : '', is_admin: u.isAdmin, status: u.status })}>Edit</button><button className="btn btn-ghost btn-sm" onClick={() => suspend(u.id, u.status)}>{u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</button></div></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={4} className="muted">No users.</td></tr> : rows.map((u) => <tr key={u.id}><td>{u.username} {u.isAdmin && <span className="badge badge-admin">admin</span>}</td><td className="mono" style={{ fontSize: 12 }}>{u.email}</td><td><span className={`badge badge-${u.status}`}>{u.status}</span></td><td><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-ghost btn-sm" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, is_admin: u.isAdmin, status: u.status })}>Edit</button><button className="btn btn-ghost btn-sm" onClick={() => suspend(u.id, u.status)}>{u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</button></div></td></tr>)}</tbody></table></div>
       <Modal open={open} onClose={() => setOpen(false)} title="New user" footer={<><button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button><button className="btn btn-primary" form="user-create">Create</button></>}>
         <form id="user-create" onSubmit={create} className="form">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <label className="field"><span className="label">Username</span><input id="u-user" className="input" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} placeholder="ava_stone" /></label>
             <label className="field"><span className="label">Email</span><input id="u-email" className="input" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="ava@qyrocloud.example" /></label>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label className="field"><span className="label">Password</span><input id="u-pass" className="input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="At least 8" /></label>
-            <label className="field"><span className="label">Expires at</span><input id="u-exp" className="input" type="datetime-local" value={f.expires_at} onChange={(e) => setF({ ...f, expires_at: e.target.value })} /></label>
-          </div>
+          <label className="field"><span className="label">Password</span><input id="u-pass" className="input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="At least 8" /></label>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={f.is_admin} onChange={(e) => setF({ ...f, is_admin: e.target.checked })} /> Admin</label>
           {err && <div className="alert alert-error" role="alert">{err}</div>}
         </form>
@@ -1177,10 +1209,7 @@ function UsersAdmin() {
               <label className="field"><span className="label">Username</span><input className="input" value={edit.username} onChange={(e) => setEdit({ ...edit, username: e.target.value })} /></label>
               <label className="field"><span className="label">Email</span><input className="input" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></label>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <label className="field"><span className="label">Expires at</span><input className="input" type="datetime-local" value={edit.expires_at} onChange={(e) => setEdit({ ...edit, expires_at: e.target.value })} /></label>
-              <label className="field"><span className="label">Status</span><select className="input" value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}><option value="active">Active</option><option value="grace">Grace</option><option value="suspended">Suspended</option></select></label>
-            </div>
+            <label className="field"><span className="label">Status</span><select className="input" value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}><option value="active">Active</option><option value="suspended">Suspended</option></select></label>
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={edit.is_admin} onChange={(e) => setEdit({ ...edit, is_admin: e.target.checked })} /> Admin</label>
             {err && <div className="alert alert-error" role="alert">{err}</div>}
           </form>
@@ -1190,7 +1219,7 @@ function UsersAdmin() {
   );
 }
 
-type ServerFormState = { name: string; description: string; userId: string; nodeId: string; eggId: string; allocationId: string; memory: string; swap: string; disk: string; io: string; cpu: string; threads: string; image: string; startup: string; oom_disabled: boolean; expires_at: string };
+type ServerFormState = { name: string; description: string; userId: string; nodeId: string; eggId: string; allocationId: string; memory: string; swap: string; disk: string; io: string; cpu: string; threads: string; image: string; startup: string; oom_disabled: boolean; allocation_limit: string; backup_limit: string; expires_at: string };
 
 function ServerForm({ initial, users, nodes, eggs, submitLabel, formId = 'server-form', onSubmit }: {
   initial: ServerFormState;
@@ -1250,6 +1279,10 @@ function ServerForm({ initial, users, nodes, eggs, submitLabel, formId = 'server
             <label className="field"><span className="label">Threads (cgroup)</span><input className="input" value={f.threads} onChange={(e) => setF({ ...f, threads: e.target.value })} placeholder="0-3" /></label>
           </div>
           <label className="field"><span className="label">Expires at (optional)</span><input type="datetime-local" className="input" value={f.expires_at} onChange={(e) => setF({ ...f, expires_at: e.target.value })} /></label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Allocation limit (0 = unlimited)</span><input className="input" value={f.allocation_limit} onChange={(e) => setF({ ...f, allocation_limit: e.target.value })} placeholder="1" /></label>
+            <label className="field"><span className="label">Backup limit (0 = unlimited)</span><input className="input" value={f.backup_limit} onChange={(e) => setF({ ...f, backup_limit: e.target.value })} placeholder="0" /></label>
+          </div>
           <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><input type="checkbox" className="input" style={{ width: 'auto' }} checked={f.oom_disabled} onChange={(e) => setF({ ...f, oom_disabled: e.target.checked })} /><span className="label" style={{ margin: 0 }}>Disable OOM killer</span></label>
         </div>
       )}
@@ -1271,10 +1304,10 @@ function NewServerPage() {
     fetch('/api/nodes', { credentials: 'include' }).then((r) => r.json()).then((j) => setNodes(j.data || []));
     fetch('/api/eggs', { credentials: 'include' }).then((r) => r.json()).then((j) => setEggs(j.data || []));
   }, []);
-  const empty: ServerFormState = { name: '', description: '', userId: '', nodeId: '', eggId: '', allocationId: '', memory: '1024', swap: '0', disk: '10240', io: '500', cpu: '100', threads: '', image: '', startup: '', oom_disabled: false, expires_at: '' };
+  const empty: ServerFormState = { name: '', description: '', userId: '', nodeId: '', eggId: '', allocationId: '', memory: '1024', swap: '0', disk: '10240', io: '500', cpu: '100', threads: '', image: '', startup: '', oom_disabled: false, allocation_limit: '1', backup_limit: '0', expires_at: '' };
   async function submit(f: ServerFormState) {
     const res = await fetch('/api/servers', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-      name: f.name, description: f.description || undefined, userId: parseInt(f.userId, 10), nodeId: parseInt(f.nodeId, 10), eggId: parseInt(f.eggId, 10), allocationId: parseInt(f.allocationId, 10), memory: parseInt(f.memory, 10), swap: parseInt(f.swap, 10), disk: parseInt(f.disk, 10), io: parseInt(f.io, 10), cpu: parseInt(f.cpu, 10), threads: f.threads || undefined, oom_disabled: f.oom_disabled, image: f.image, startup: f.startup, expires_at: f.expires_at || null,
+      name: f.name, description: f.description || undefined, userId: parseInt(f.userId, 10), nodeId: parseInt(f.nodeId, 10), eggId: parseInt(f.eggId, 10), allocationId: parseInt(f.allocationId, 10), memory: parseInt(f.memory, 10), swap: parseInt(f.swap, 10), disk: parseInt(f.disk, 10), io: parseInt(f.io, 10), cpu: parseInt(f.cpu, 10), threads: f.threads || undefined, oom_disabled: f.oom_disabled, image: f.image, startup: f.startup, allocation_limit: parseInt(f.allocation_limit || '1', 10), backup_limit: parseInt(f.backup_limit || '0', 10), expires_at: f.expires_at || null,
     }) });
     const j = await res.json();
     if (!res.ok) return j.errors?.[0]?.detail || 'Failed';
@@ -1300,7 +1333,7 @@ function ServerEditorPage() {
   const [allocs, setAllocs] = React.useState<{ id: number; ip: string; port: number; serverId: number | null }[]>([]);
   const [vars, setVars] = React.useState<{ variable_id: number; name: string; description: string | null; env_variable: string; default_value: string; rules: string; value: string; user_editable: boolean }[]>([]);
   const [f, setF] = React.useState({
-    name: '', description: '', userId: '', nodeId: '', eggId: '', allocationId: '', memory: '', swap: '0', disk: '', io: '500', cpu: '', threads: '', image: '', startup: '', oom_disabled: false, status: 'active', expires_at: '',
+    name: '', description: '', userId: '', nodeId: '', eggId: '', allocationId: '', memory: '', swap: '0', disk: '', io: '500', cpu: '', threads: '', image: '', startup: '', oom_disabled: false, status: 'active', allocation_limit: '1', backup_limit: '0', expires_at: '',
   });
   const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState('');
   const [saving, setSaving] = React.useState(false);
@@ -1311,7 +1344,7 @@ function ServerEditorPage() {
       const s = j.data;
       if (!s) { setErr('Server not found'); return; }
       setSrv(s);
-      setF({ name: s.name, description: s.description || '', userId: String(s.userId), nodeId: String(s.nodeId), eggId: String(s.eggId), allocationId: String(s.allocationId), memory: String(s.memory), swap: String(s.swap ?? 0), disk: String(s.disk), io: String(s.io ?? 500), cpu: String(s.cpu), threads: s.threads || '', image: s.image, startup: s.startup, oom_disabled: !!s.oomDisabled, status: s.status || 'active', expires_at: s.expiresAt ? String(s.expiresAt).slice(0, 16) : '' });
+      setF({ name: s.name, description: s.description || '', userId: String(s.userId), nodeId: String(s.nodeId), eggId: String(s.eggId), allocationId: String(s.allocationId), memory: String(s.memory), swap: String(s.swap ?? 0), disk: String(s.disk), io: String(s.io ?? 500), cpu: String(s.cpu), threads: s.threads || '', image: s.image, startup: s.startup, oom_disabled: !!s.oomDisabled, status: s.status || 'active', allocation_limit: String(s.allocationLimit ?? 1), backup_limit: String(s.backupLimit ?? 0), expires_at: s.expiresAt ? String(s.expiresAt).slice(0, 16) : '' });
     });
     fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || []));
     fetch('/api/nodes', { credentials: 'include' }).then((r) => r.json()).then((j) => setNodes(j.data || []));
@@ -1334,7 +1367,7 @@ function ServerEditorPage() {
     const body: Record<string, unknown> = {
       name: f.name.trim(), description: f.description || null, userId: parseInt(f.userId, 10), nodeId: parseInt(f.nodeId, 10), eggId: parseInt(f.eggId, 10), allocationId: parseInt(f.allocationId, 10),
       memory: parseInt(f.memory, 10), swap: parseInt(f.swap, 10), disk: parseInt(f.disk, 10), io: parseInt(f.io, 10), cpu: parseInt(f.cpu, 10), threads: f.threads || null,
-      oom_disabled: f.oom_disabled, image: f.image, startup: f.startup, status: f.status, expires_at: f.expires_at || null,
+      oom_disabled: f.oom_disabled, image: f.image, startup: f.startup, status: f.status, allocation_limit: parseInt(f.allocation_limit || '1', 10), backup_limit: parseInt(f.backup_limit || '0', 10), expires_at: f.expires_at || null,
     };
     const res = await fetch(`/api/servers/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await res.json().catch(() => ({}));
@@ -1407,6 +1440,10 @@ function ServerEditorPage() {
           <label className="field"><span className="label">IO weight</span><input className="input" value={f.io} onChange={(e) => setF({ ...f, io: e.target.value })} /></label>
           <label className="field"><span className="label">Threads (cgroup)</span><input className="input mono" value={f.threads} onChange={(e) => setF({ ...f, threads: e.target.value })} /></label>
           <label className="field" style={{ display: 'flex', alignItems: 'flex-end' }}><label style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}><input type="checkbox" checked={f.oom_disabled} onChange={(e) => setF({ ...f, oom_disabled: e.target.checked })} /> Disable OOM killer</label></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+          <label className="field"><span className="label">Allocation limit (0 = unlimited)</span><input className="input" value={f.allocation_limit} onChange={(e) => setF({ ...f, allocation_limit: e.target.value })} placeholder="1" /></label>
+          <label className="field"><span className="label">Backup limit (0 = unlimited)</span><input className="input" value={f.backup_limit} onChange={(e) => setF({ ...f, backup_limit: e.target.value })} placeholder="0" /></label>
         </div>
       </Card>
       <Card title="Runtime">
@@ -2046,9 +2083,8 @@ function AppInner() {
         <Route path="/server/:id" element={<RequireAuth><ServerManage /></RequireAuth>} />
         <Route path="/account" element={<Navigate to="/settings" replace />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/request-access" element={<RequestAccessPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route path="/admin" element={<RequireAuth adminOnly><AdminOverview /></RequireAuth>} />
-        <Route path="/admin/requests" element={<RequireAuth adminOnly><RequestsAdmin /></RequireAuth>} />
         <Route path="/admin/users" element={<RequireAuth adminOnly><UsersAdmin /></RequireAuth>} />
         <Route path="/admin/servers" element={<RequireAuth adminOnly><AdminServers /></RequireAuth>} />
         <Route path="/admin/servers/new" element={<RequireAuth adminOnly><NewServerPage /></RequireAuth>} />

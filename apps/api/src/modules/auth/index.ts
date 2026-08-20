@@ -29,6 +29,24 @@ function cookieSecure(c: { req: { header: (n: string) => string | undefined } })
 export default function authRoutes(db: Db) {
   const app = new Hono();
 
+  app.post('/register', zJson(z.object({ username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/, 'Letters, numbers, _, ., - only'), email: z.string().email(), password: z.string().min(8).max(128) })), async (c) => {
+    const settings = await db.select().from(schema.settings).where(eq(schema.settings.key, 'registration_enabled'));
+    if ((settings[0]?.value ?? 'true') !== 'true') return c.json({ errors: [{ code: 'registration_disabled', detail: 'Registration is currently disabled.' }] }, 403);
+    const { username, email, password } = c.req.valid('json' as never) as { username: string; email: string; password: string };
+    const em = email.toLowerCase().trim();
+    const dupEmail = await db.select().from(schema.users).where(eq(schema.users.email, em)).limit(1);
+    if (dupEmail[0]) return c.json({ errors: [{ code: 'email_taken', detail: 'Email already in use' }] }, 409);
+    const dupUser = await db.select().from(schema.users).where(eq(schema.users.username, username)).limit(1);
+    if (dupUser[0]) return c.json({ errors: [{ code: 'username_taken', detail: 'Username already taken' }] }, 409);
+    const hash = await argon2.hash(password);
+    const [user] = await db.insert(schema.users).values({ username, email: em, passwordHash: hash, isAdmin: false, status: 'active' }).returning();
+    await audit(db, user.id, 'auth.register', 'user', String(user.id), auditIp(c), { email: em });
+    const sid = crypto.randomBytes(16).toString('hex');
+    await db.insert(schema.sessions).values({ id: sid, userId: user.id, ip: c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || c.req.header('x-real-ip') || '', ua: (c.req.header('user-agent') || '').slice(0, 512), expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000) });
+    setCookie(c, 'lunix_sid', sid, { httpOnly: true, path: '/', sameSite: 'Lax', secure: cookieSecure(c), maxAge: 30 * 24 * 3600 });
+    return c.json({ data: { id: user.id, email: user.email, username: user.username, is_admin: false, status: user.status } }, 201);
+  });
+
   app.post('/login', zJson(z.object({ email: z.string().email(), password: z.string().min(1), code: z.string().optional() })), async (c) => {
     const { email, password, code } = c.req.valid('json' as never) as { email: string; password: string; code?: string };
     const rows = await db.select().from(schema.users).where(eq(schema.users.email, email.toLowerCase().trim())).limit(1);

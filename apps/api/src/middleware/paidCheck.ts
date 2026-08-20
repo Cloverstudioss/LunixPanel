@@ -5,11 +5,8 @@ export async function paidCheck(c: Context, next: Next) {
   const u = (c as unknown as { get: (k: string) => unknown }).get('user') as AuthedUser | undefined;
   if (!u) { await next(); return; }
   if (u.isAdmin) { await next(); return; }
-  const now = new Date();
-  const expired = u.expiresAt ? new Date(u.expiresAt) < now : false;
-  const graceOver = u.graceUntil ? new Date(u.graceUntil) < now : false;
-  if (u.status === 'suspended' || (expired && graceOver)) {
-    return c.json({ errors: [{ code: 'account_expired', detail: 'Your QyroCloud access has expired. Please renew at QyroCloud to restore servers.' }] }, 403);
+  if (u.status === 'suspended') {
+    return c.json({ errors: [{ code: 'account_suspended', detail: 'Your account is suspended. Please contact support.' }] }, 403);
   }
   await next();
 }

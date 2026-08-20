@@ -193,5 +193,30 @@ export default function remoteRoutes(db: Db) {
     }
     return c.json({ errors: [{ code: 'forbidden', detail: 'Invalid credentials' }] }, 401);
   });
+  app.post('/backups/:backup', async (c) => {
+    const backupUuid = c.req.param('backup') || '';
+    const body = await c.req.json().catch(() => ({})) as { checksum?: string; checksum_type?: string; size?: number; successful?: boolean };
+    const rows = await db.select().from(schema.backups).where(eq(schema.backups.uuid, backupUuid)).limit(1);
+    const b = rows[0];
+    if (!b) return c.json({ errors: [{ code: 'not_found', detail: 'Backup not found' }] }, 404);
+    const successful = body.successful !== false;
+    await db.update(schema.backups).set({
+      status: successful ? 'completed' : 'failed',
+      size: successful && body.size !== undefined ? body.size : b.size,
+      completedAt: new Date(),
+    }).where(eq(schema.backups.id, b.id));
+    return c.body(null, 204);
+  });
+  app.post('/backups/:backup/restore', async (c) => {
+    const backupUuid = c.req.param('backup') || '';
+    const body = await c.req.json().catch(() => ({})) as { successful?: boolean };
+    const rows = await db.select().from(schema.backups).where(eq(schema.backups.uuid, backupUuid)).limit(1);
+    const b = rows[0];
+    if (!b) return c.json({ errors: [{ code: 'not_found', detail: 'Backup not found' }] }, 404);
+    if (body.successful !== false) {
+      await db.update(schema.servers).set({ status: 'active' }).where(eq(schema.servers.id, b.serverId));
+    }
+    return c.body(null, 204);
+  });
   return app;
 }

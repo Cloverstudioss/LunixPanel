@@ -8,7 +8,6 @@ import { paidCheck } from './middleware/paidCheck.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import { startExpiryCron } from './cron/expiryChecker.js';
 import authRoutes from './modules/auth/index.js';
-import accountRequestRoutes from './modules/account-requests/index.js';
 import eggRoutes from './modules/eggs/index.js';
 import proxmoxRoutes from './modules/proxmox/index.js';
 import userRoutes from './modules/users/index.js';
@@ -56,13 +55,12 @@ app.get('/api/health', (c) => c.json({ status: 'ok', name: BRANDING.panel, vendo
 app.route('/api/remote', remoteRoutes(db as never));
 
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 8, keyPrefix: 'login' }));
-app.use('/api/account-requests', rateLimit({ windowMs: 60 * 60 * 1000, max: 20, keyPrefix: 'req' }));
+app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, keyPrefix: 'reg' }));
 
 if (db) {
   app.use('*', authMiddleware(db));
   app.use('/api/servers/*', paidCheck as never);
   app.route('/api/auth', authRoutes(db));
-  app.route('/api/account-requests', accountRequestRoutes(db));
   app.route('/api/eggs', eggRoutes(db));
   app.route('/api/proxmox', proxmoxRoutes(db));
   app.route('/api/users', userRoutes(db));
