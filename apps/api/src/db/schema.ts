@@ -189,10 +189,49 @@ export const proxmoxVmAssignments = pgTable('proxmox_vm_assignments', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pve_assign_cluster_node_vmid_idx').on(t.clusterId, t.node, t.vmid)]);
 
+export const proxmoxIps = pgTable('proxmox_ips', {
+  id: serial('id').primaryKey(),
+  clusterId: integer('cluster_id').notNull().references(() => proxmoxClusters.id, { onDelete: 'cascade' }),
+  node: varchar('node', { length: 191 }).notNull(),
+  bridge: varchar('bridge', { length: 191 }).notNull().default('vmbr0'),
+  address: varchar('address', { length: 191 }).notNull(),
+  gateway: varchar('gateway', { length: 191 }),
+  vlan: integer('vlan'),
+  description: varchar('description', { length: 191 }),
+  assignmentId: integer('assignment_id').references(() => proxmoxVmAssignments.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('pve_ip_cluster_node_idx').on(t.clusterId, t.node), index('pve_ip_address_idx').on(t.address), index('pve_ip_assignment_idx').on(t.assignmentId)]);
+
+export const proxmoxTemplates = pgTable('proxmox_templates', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 191 }).notNull(),
+  description: text('description'),
+  type: varchar('type', { length: 10 }).notNull(),
+  ostemplate: varchar('ostemplate', { length: 512 }),
+  iso: varchar('iso', { length: 512 }),
+  storage: varchar('storage', { length: 191 }),
+  defaultCores: integer('default_cores'),
+  defaultMemory: integer('default_memory'),
+  defaultDisk: integer('default_disk'),
+  banner: varchar('banner', { length: 512 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('pve_template_name_idx').on(t.name)]);
+
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 191 }).primaryKey(),
   value: text('value').notNull(),
 });
+
+export const themes = pgTable('themes', {
+  id: serial('id').primaryKey(),
+  slug: varchar('slug', { length: 64 }).notNull().unique(),
+  name: varchar('name', { length: 191 }).notNull(),
+  mode: varchar('mode', { length: 10 }).notNull().default('dark'),
+  colors: jsonb('colors').$type<Record<string, string>>().notNull().default({}),
+  isActive: boolean('is_active').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('themes_slug_idx').on(t.slug), index('themes_active_idx').on(t.isActive)]);
 
 export const auditLogs = pgTable('audit_logs', {
   id: serial('id').primaryKey(),

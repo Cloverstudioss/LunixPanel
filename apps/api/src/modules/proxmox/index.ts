@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validator } from 'hono/validator';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import * as schema from '../../db/schema.js';
 import type { Db } from '../../db/index.js';
 import { requireAdmin } from '../../middleware/auth.js';
@@ -164,6 +164,224 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
   });
+  app.get('/templates', requireAdmin, async (c) => {
+    const rows = await db.select().from(schema.proxmoxTemplates);
+    return c.json({ data: rows });
+  });
+  app.get('/templates/:id', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, id)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Template not found' }] }, 404);
+    return c.json({ data: rows[0] });
+  });
+  app.post('/templates', requireAdmin, zJson(z.object({
+    name: z.string().min(1).max(191),
+    description: z.string().optional(),
+    type: z.enum(['qemu', 'lxc']),
+    storage: z.string().max(191).optional(),
+    iso: z.string().max(512).optional(),
+    ostemplate: z.string().max(512).optional(),
+    defaultCores: z.number().int().min(1).max(64).optional(),
+    defaultMemory: z.number().int().min(128).max(262144).optional(),
+    defaultDisk: z.number().int().min(1).max(10000).optional(),
+    banner: z.string().url().optional(),
+  })), async (c) => {
+    const b = c.req.valid('json' as never) as { name: string; description?: string; type: 'qemu' | 'lxc'; storage?: string; iso?: string; ostemplate?: string; defaultCores?: number; defaultMemory?: number; defaultDisk?: number; banner?: string };
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    const existing = await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.name, b.name.trim())).limit(1);
+    if (existing[0]) return c.json({ errors: [{ code: 'conflict', detail: 'Template name already exists' }] }, 409);
+    if (b.type === 'lxc' && !b.ostemplate) return c.json({ errors: [{ code: 'validation', detail: 'ostemplate required for LXC' }] }, 422);
+    if (b.type === 'qemu' && !b.iso && !b.storage) return c.json({ errors: [{ code: 'validation', detail: 'iso or storage required for QEMU' }] }, 422);
+    if (b.banner && !/^(https?):\/\/.+/.test(b.banner)) return c.json({ errors: [{ code: 'validation', detail: 'Banner must be a valid URL' }] }, 422);
+    const [row] = await db.insert(schema.proxmoxTemplates).values({
+      name: b.name.trim(),
+      description: b.description || null,
+      type: b.type,
+      storage: b.storage || null,
+      iso: b.iso || null,
+      ostemplate: b.ostemplate || null,
+      defaultCores: b.defaultCores,
+      defaultMemory: b.defaultMemory,
+      defaultDisk: b.defaultDisk,
+      banner: b.banner || null,
+    }).returning();
+    await audit(db, admin.id, 'proxmox.template.created', 'proxmox_template', String(row.id), auditIp(c), { name: row.name, type: row.type });
+    return c.json({ data: row }, 201);
+  });
+  app.patch('/templates/:id', requireAdmin, zJson(z.object({
+    name: z.string().min(1).max(191).optional(),
+    description: z.string().optional(),
+    type: z.enum(['qemu', 'lxc']).optional(),
+    storage: z.string().max(191).optional(),
+    iso: z.string().max(512).optional(),
+    ostemplate: z.string().max(512).optional(),
+    defaultCores: z.number().int().min(1).max(64).optional(),
+    defaultMemory: z.number().int().min(128).max(262144).optional(),
+    defaultDisk: z.number().int().min(1).max(10000).optional(),
+    banner: z.string().url().optional(),
+  })), async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const b = c.req.valid('json' as never) as Record<string, unknown>;
+    const rows = await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, id)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Template not found' }] }, 404);
+    const update: Record<string, unknown> = {};
+    if (b.name !== undefined) {
+      const name = String(b.name).trim();
+      if (name.length === 0) return c.json({ errors: [{ code: 'validation', detail: 'Name cannot be empty' }] }, 422);
+      const dup = await db
+        .select()
+        .from(schema.proxmoxTemplates)
+        .where(and(eq(schema.proxmoxTemplates.name, name), ne(schema.proxmoxTemplates.id, id)))
+        .limit(1);
+      if (dup[0]) return c.json({ errors: [{ code: 'conflict', detail: 'Template name already exists' }] }, 409);
+      update.name = name;
+    }
+    if (b.description !== undefined) update.description = (b.description as string) || null;
+    if (b.type !== undefined) update.type = b.type as string;
+    if (b.storage !== undefined) update.storage = (b.storage as string) || null;
+    if (b.iso !== undefined) update.iso = (b.iso as string) || null;
+    if (b.ostemplate !== undefined) update.ostemplate = (b.ostemplate as string) || null;
+    if (b.defaultCores !== undefined) update.defaultCores = b.defaultCores as number;
+    if (b.defaultMemory !== undefined) update.defaultMemory = b.defaultMemory as number;
+    if (b.defaultDisk !== undefined) update.defaultDisk = b.defaultDisk as number;
+    if (b.banner !== undefined) {
+      const banner = (b.banner as string) || null;
+      if (banner && !/^(https?):\/\/.+/.test(banner)) return c.json({ errors: [{ code: 'validation', detail: 'Banner must be a valid URL' }] }, 422);
+      update.banner = banner;
+    }
+    const [row] = await db.update(schema.proxmoxTemplates).set(update).where(eq(schema.proxmoxTemplates.id, id)).returning();
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.template.updated', 'proxmox_template', String(id), auditIp(c), { fields: Object.keys(update) });
+    return c.json({ data: row });
+  });
+  app.delete('/templates/:id', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, id)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Template not found' }] }, 404);
+    await db.delete(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, id));
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.template.deleted', 'proxmox_template', String(id), auditIp(c), {});
+    return c.json({ data: { ok: true } });
+  });
+
+  app.get('/clusters/:id/ips', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const node = (c.req.query('node') as string) || '';
+    const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
+    const cluster = rows[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const assignments = await db.select({ id: schema.proxmoxVmAssignments.id, vmid: schema.proxmoxVmAssignments.vmid, userId: schema.proxmoxVmAssignments.userId, type: schema.proxmoxVmAssignments.type }).from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.clusterId, id));
+    const assignMap = new Map(assignments.map((a) => [a.id, a]));
+    const users = await db.select({ id: schema.users.id, username: schema.users.username }).from(schema.users);
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    const q = node
+      ? db.select().from(schema.proxmoxIps).where(and(eq(schema.proxmoxIps.clusterId, id), eq(schema.proxmoxIps.node, node)))
+      : db.select().from(schema.proxmoxIps).where(eq(schema.proxmoxIps.clusterId, id));
+    const ips = await q;
+    const data = ips
+      .map((i) => {
+        const a = i.assignmentId ? assignMap.get(i.assignmentId) : null;
+        const owner = a?.userId ? userMap.get(a.userId) : null;
+        return {
+          id: i.id,
+          node: i.node,
+          bridge: i.bridge,
+          address: i.address,
+          gateway: i.gateway,
+          vlan: i.vlan,
+          description: i.description,
+          assigned: a
+            ? { vmid: a.vmid, type: a.type, user: owner ? { id: owner.id, username: owner.username } : null }
+            : null,
+        };
+      })
+      .sort((a, b) => (a.assigned ? 1 : -1) - (b.assigned ? 1 : -1));
+    return c.json({ data });
+  });
+  app.post('/clusters/:id/ips', requireAdmin, zJson(z.object({
+    node: z.string().min(1).max(191),
+    bridge: z.string().min(1).max(191).default('vmbr0'),
+    address: z.string().min(1).max(191),
+    gateway: z.string().max(191).optional(),
+    vlan: z.number().int().min(1).max(4094).optional(),
+    description: z.string().max(191).optional(),
+  })), async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const b = c.req.valid('json' as never) as { node: string; bridge: string; address: string; gateway?: string; vlan?: number; description?: string };
+    const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1).then((r) => r[0]);
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    if (!/^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(b.address))
+      return c.json({ errors: [{ code: 'validation', detail: 'Address must be CIDR like 10.0.0.10/24' }] }, 422);
+    const existing = await db
+      .select()
+      .from(schema.proxmoxIps)
+      .where(and(eq(schema.proxmoxIps.clusterId, id), eq(schema.proxmoxIps.address, b.address)))
+      .limit(1);
+    if (existing[0]) return c.json({ errors: [{ code: 'conflict', detail: 'IP already in pool for this cluster' }] }, 409);
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    const [row] = await db
+      .insert(schema.proxmoxIps)
+      .values({ clusterId: id, node: b.node, bridge: b.bridge, address: b.address, gateway: b.gateway, vlan: b.vlan, description: b.description })
+      .returning();
+    await audit(db, admin.id, 'proxmox.ip.created', 'proxmox_ip', String(row.id), auditIp(c), { address: b.address, node: b.node });
+    return c.json({ data: row }, 201);
+  });
+  app.patch('/clusters/:id/ips/:ipId', requireAdmin, zJson(z.object({
+    gateway: z.string().max(191).optional(),
+    vlan: z.number().int().min(1).max(4094).nullable().optional(),
+    description: z.string().max(191).optional(),
+  })), async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const ipId = parseInt(c.req.param('ipId') || '0', 10);
+    const b = c.req.valid('json' as never) as { gateway?: string; vlan?: number | null; description?: string };
+    const rows = await db.select().from(schema.proxmoxIps).where(eq(schema.proxmoxIps.id, ipId)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'IP not found' }] }, 404);
+    if (rows[0].clusterId !== id) return c.json({ errors: [{ code: 'not_found', detail: 'IP not found' }] }, 404);
+    if (rows[0].assignmentId)
+      return c.json({ errors: [{ code: 'conflict', detail: 'Cannot edit address while assigned' }] }, 409);
+    const update: Record<string, unknown> = {};
+    if (b.gateway !== undefined) update.gateway = b.gateway;
+    if (b.vlan !== undefined) update.vlan = b.vlan;
+    if (b.description !== undefined) update.description = b.description;
+    if (Object.keys(update).length === 0) return c.json({ errors: [{ code: 'validation', detail: 'No fields to update' }] }, 422);
+    const [row] = await db.update(schema.proxmoxIps).set(update).where(eq(schema.proxmoxIps.id, ipId)).returning();
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.ip.updated', 'proxmox_ip', String(ipId), auditIp(c), { fields: Object.keys(update) });
+    return c.json({ data: row });
+  });
+  app.delete('/clusters/:id/ips/:ipId', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const ipId = parseInt(c.req.param('ipId') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxIps).where(eq(schema.proxmoxIps.id, ipId)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'IP not found' }] }, 404);
+    if (rows[0].clusterId !== id) return c.json({ errors: [{ code: 'not_found', detail: 'IP not found' }] }, 404);
+    if (rows[0].assignmentId) return c.json({ errors: [{ code: 'conflict', detail: 'Cannot delete assigned IP' }] }, 409);
+    await db.delete(schema.proxmoxIps).where(eq(schema.proxmoxIps.id, ipId));
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.ip.deleted', 'proxmox_ip', String(ipId), auditIp(c), {});
+    return c.json({ data: { ok: true } });
+  });
+  app.post('/clusters/test-connection', requireAdmin, zJson(z.object({ host: z.string().url(), api_token_id: z.string().min(1), api_token_secret: z.string().min(1), verify_tls: z.boolean().optional() })), async (c) => {
+    const b = c.req.valid('json' as never) as { host: string; api_token_id: string; api_token_secret: string; verify_tls?: boolean };
+    const host = b.host.replace(/\/$/, '');
+    const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    if (!b.verify_tls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    try {
+      const [versionRes, nodesRes] = await Promise.all([
+        fetch(`${host}/api2/json/version`, { headers: { Authorization: `PVEAPIToken=${b.api_token_id}=${b.api_token_secret}` } } as RequestInit),
+        fetch(`${host}/api2/json/nodes`, { headers: { Authorization: `PVEAPIToken=${b.api_token_id}=${b.api_token_secret}` } } as RequestInit),
+      ]);
+      if (!versionRes.ok) return c.json({ errors: [{ code: 'auth_failed', detail: `Authentication failed — HTTP ${versionRes.status}` }] }, 422);
+      const versionData = await versionRes.json().catch(() => ({})) as { data?: { version?: string; release?: string } };
+      const nodesData = nodesRes.ok ? await nodesRes.json().catch(() => ({ data: [] })) as { data?: { node: string; status: string; cpu?: number; mem?: number; maxmem?: number; uptime?: number }[] } : { data: [] };
+      const nodes = (nodesData.data || []).map((n) => ({ node: n.node, status: n.status, cpu: n.cpu ?? null, mem: n.mem ?? null, maxmem: n.maxmem ?? null, uptime: n.uptime ?? null }));
+      return c.json({ data: { ok: true, version: versionData.data?.version || null, release: versionData.data?.release || null, nodes } });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'connection_failed', detail: `Cannot reach ${host} — ${(e as Error).message}` }] }, 422);
+    } finally {
+      if (!b.verify_tls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
+    }
+  });
   app.post('/assignments', requireAdmin, zJson(z.object({ clusterId: z.number().int(), node: z.string().min(1), type: z.enum(['qemu', 'lxc']), vmid: z.number().int(), userId: z.number().int() })), async (c) => {
     const b = c.req.valid('json' as never) as { clusterId: number; node: string; type: 'qemu' | 'lxc'; vmid: number; userId: number };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, b.clusterId)).limit(1).then((r) => r[0]);
@@ -208,55 +426,83 @@ export default function proxmoxRoutes(db: Db) {
     ostemplate: z.string().max(512).optional(),
     sshkeys: z.string().max(5000).optional(),
     userId: z.number().int().optional(),
+    ipPoolId: z.number().int().optional(),
+    templateId: z.number().int().optional(),
   })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const b = c.req.valid('json' as never) as { node: string; type: 'qemu' | 'lxc'; vmid?: number; hostname?: string; name?: string; cores?: number; sockets?: number; memory?: number; balloon?: number; disk?: number; storage?: string; bridge?: string; vlan?: number | null; ip?: string; gateway?: string; nameserver?: string; searchdomain?: string; iso?: string; ostemplate?: string; sshkeys?: string; userId?: number };
+    const b = c.req.valid('json' as never) as { node: string; type: 'qemu' | 'lxc'; vmid?: number; hostname?: string; name?: string; cores?: number; sockets?: number; memory?: number; balloon?: number; disk?: number; storage?: string; bridge?: string; vlan?: number | null; ip?: string; gateway?: string; nameserver?: string; searchdomain?: string; iso?: string; ostemplate?: string; sshkeys?: string; userId?: number; ipPoolId?: number; templateId?: number };
     const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
     const cluster = rows[0];
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
     const key = process.env.ENCRYPTION_KEY!;
-    const bridge = b.bridge || 'vmbr0';
-    const ipRaw = (b.ip || 'dhcp').trim();
-    const ip = ipRaw === '' ? 'dhcp' : ipRaw;
     const hostname = (b.hostname || b.name || '').trim();
     if (hostname && !fqdnRe.test(hostname)) return c.json({ errors: [{ code: 'validation', detail: 'Hostname must be a valid FQDN like vm1.example.com' }] }, 422);
+
+    let pool;
+    if (b.ipPoolId) {
+      const ipRows = await db.select().from(schema.proxmoxIps).where(eq(schema.proxmoxIps.id, b.ipPoolId)).limit(1);
+      pool = ipRows[0];
+      if (!pool || pool.clusterId !== id) return c.json({ errors: [{ code: 'validation', detail: 'IP pool not found for this cluster' }] }, 422);
+      if (pool.assignmentId) return c.json({ errors: [{ code: 'conflict', detail: 'IP pool is already assigned' }] }, 409);
+      if (pool.node !== b.node) return c.json({ errors: [{ code: 'validation', detail: `IP pool node (${pool.node}) must match selected node (${b.node})` }] }, 422);
+    }
+
+    let tmpl;
+    if (b.templateId) {
+      const tmplRows = await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, b.templateId)).limit(1);
+      tmpl = tmplRows[0];
+      if (!tmpl) return c.json({ errors: [{ code: 'not_found', detail: 'Template not found' }] }, 404);
+      if (tmpl.type !== b.type) return c.json({ errors: [{ code: 'validation', detail: `Template type (${tmpl.type}) must match VM type (${b.type})` }] }, 422);
+    }
+
+    const bridge = b.bridge || (pool ? pool.bridge : (tmpl ? (tmpl.storage || 'vmbr0') : 'vmbr0')) || 'vmbr0';
+    const ipRaw = (b.ip || (pool ? pool.address : '') || 'dhcp').trim();
+    const ip = ipRaw === '' ? 'dhcp' : ipRaw;
     if (ip !== 'dhcp' && !/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(ip)) return c.json({ errors: [{ code: 'validation', detail: 'IP must be dhcp or CIDR like 10.0.0.10/24' }] }, 422);
-    if (b.type === 'lxc' && !b.ostemplate) return c.json({ errors: [{ code: 'validation', detail: 'ostemplate required for LXC (e.g. local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst)' }] }, 422);
-    const storage = b.storage || (b.type === 'qemu' ? 'local-lvm' : 'local-lvm');
-    const diskGB = b.disk ?? 20;
+    const gateway = b.gateway || (pool ? pool.gateway : null);
+    const templateVlan = b.vlan !== undefined ? b.vlan : (pool ? pool.vlan : null);
+    if (b.type === 'lxc' && !b.ostemplate && !tmpl?.ostemplate) return c.json({ errors: [{ code: 'validation', detail: 'ostemplate required for LXC (e.g. local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst)' }] }, 422);
+    const storage = b.storage || (tmpl ? tmpl.storage : undefined) || (b.type === 'qemu' ? 'local-lvm' : 'local-lvm');
+    const diskGB = b.disk ?? (tmpl ? (tmpl.defaultDisk || 20) : 20);
+    const cores = b.cores ?? (tmpl ? (tmpl.defaultCores || 1) : undefined);
+    const sockets = b.sockets ?? undefined;
+    const memory = b.memory ?? (tmpl ? (tmpl.defaultMemory || 512) : 512);
+    const balloon = b.balloon !== undefined ? b.balloon : undefined;
     const params: Record<string, string | number> = {};
     if (b.vmid) params.vmid = b.vmid;
     if (hostname) params.name = hostname;
     else if (b.name) params.name = b.name;
-    if (b.cores) params.cores = b.cores;
-    if (b.sockets) params.sockets = b.sockets;
-    if (b.memory) params.memory = b.memory;
-    if (b.balloon !== undefined) params.balloon = b.balloon;
+    if (cores) params.cores = cores;
+    if (sockets) params.sockets = sockets;
+    if (memory) params.memory = memory;
+    if (balloon !== undefined) params.balloon = balloon;
     if (hostname) params.hostname = hostname;
+    const iso = b.iso || (tmpl ? tmpl.iso : undefined);
+    const ostemplate = b.ostemplate || (tmpl ? tmpl.ostemplate : undefined);
     if (b.type === 'qemu') {
       params['scsi0'] = `${storage}:${diskGB}`;
       let net0 = `virtio,bridge=${bridge}`;
       if (ip && ip !== 'dhcp') net0 += `,ip=${ip}`;
       else if (ip === 'dhcp') net0 += `,ip=dhcp`;
-      if (b.gateway) net0 += `,gw=${b.gateway}`;
-      if (b.vlan) net0 += `,tag=${b.vlan}`;
+      if (gateway) net0 += `,gw=${gateway}`;
+      if (templateVlan) net0 += `,tag=${templateVlan}`;
       params.net0 = net0;
       if (b.nameserver) params.nameserver = b.nameserver;
       if (b.searchdomain) params.searchdomain = b.searchdomain;
-      if (b.iso) params.ide2 = `${b.iso},media=cdrom`;
+      if (iso) params.ide2 = `${iso},media=cdrom`;
       if (b.sshkeys) params.sshkeys = encodeURIComponent(b.sshkeys);
       params.agent = 'enabled=1';
     } else {
       params.hostname = hostname || b.name || `ct${b.vmid || ''}`;
-      params.cores = b.cores || 1;
-      params.memory = b.memory || 512;
+      params.cores = cores || 1;
+      params.memory = memory || 512;
       params.rootfs = `${storage}:${diskGB}`;
       let net0 = `name=eth0,bridge=${bridge}`;
       net0 += `,ip=${ip}`;
-      if (b.gateway) net0 += `,gw=${b.gateway}`;
-      if (b.vlan) net0 += `,tag=${b.vlan}`;
+      if (gateway) net0 += `,gw=${gateway}`;
+      if (templateVlan) net0 += `,tag=${templateVlan}`;
       params.net0 = net0;
-      if (b.ostemplate) params.ostemplate = b.ostemplate;
+      if (ostemplate) params.ostemplate = ostemplate;
       if (b.nameserver) params.nameserver = b.nameserver;
       if (b.searchdomain) params.searchdomain = b.searchdomain;
       if (b.sshkeys) params['ssh-public-keys'] = encodeURIComponent(b.sshkeys);
@@ -265,8 +511,13 @@ export default function proxmoxRoutes(db: Db) {
     try {
       const res = b.type === 'qemu' ? await createQemu(cluster as never, key, b.node, params) : await createLxc(cluster as never, key, b.node, params);
       const vmid = b.vmid || parseInt(String((res as { data?: string }).data || '').replace(/\D/g, '') || '0', 10) || 0;
+      let createdAssignmentId;
       if (b.userId && vmid) {
-        try { await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid, userId: b.userId }); } catch {}
+        const [assign] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid, userId: b.userId }).returning();
+        createdAssignmentId = assign?.id;
+      }
+      if (pool && createdAssignmentId) {
+        try { await db.update(schema.proxmoxIps).set({ assignmentId: createdAssignmentId }).where(eq(schema.proxmoxIps.id, b.ipPoolId!)); } catch {}
       }
       const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
       await audit(db, admin.id, 'proxmox.created', 'proxmox_vm', `${id}/${b.node}/${vmid}`, auditIp(c), { node: b.node, type: b.type, vmid, hostname });

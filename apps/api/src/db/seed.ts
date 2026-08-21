@@ -24,4 +24,21 @@ if (existing.length === 0) {
 } else {
   console.log(`DB already has ${existing.length} user(s), skipping seed. Admin: ${existing.find(u => u.isAdmin)?.email || existing[0].email}`);
 }
+
+const existingThemes = await db.select().from(schema.themes).limit(1);
+if (existingThemes.length === 0) {
+  await db.insert(schema.themes).values([
+    {
+      slug: 'dark', name: 'Dark', mode: 'dark', isActive: true,
+      colors: { bg:'#0a0a0a', bgSoft:'#131315', surface:'#17171a', surface2:'#1c1c1e', line:'#212126', lineStrong:'#2a2a30', text:'#f4f4f5', muted:'#9f9fa9', muted2:'#71717a', accent:'#22c55e', accentHover:'#4ade80' },
+    },
+    {
+      slug: 'light', name: 'Light', mode: 'light', isActive: false,
+      colors: { bg:'#f7f7f9', bgSoft:'#f0f0f2', surface:'#ffffff', surface2:'#f0f0f2', line:'#d2d2d6', lineStrong:'#b8b8c0', text:'#18181b', muted:'#6b7280', muted2:'#9ca3af', accent:'#2563eb', accentHover:'#3b82f6' },
+    },
+  ]);
+  console.log('Seeded default themes (Dark, Light)');
+} else {
+  console.log(`DB already has ${existingThemes.length} theme(s)`);
+}
 process.exit(0);

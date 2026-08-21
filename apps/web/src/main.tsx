@@ -2,8 +2,9 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FiGrid, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase, FiMoreVertical, FiCheckSquare, FiArchive, FiRefreshCw } from 'react-icons/fi';
+import { FiGrid, FiLayout, FiMoon, FiSun, FiEdit3, FiCheck, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase, FiMoreVertical, FiCheckSquare, FiArchive, FiRefreshCw } from 'react-icons/fi';
 import { QyroMark } from './QyroBrand';
+import { applyTheme, THEME_PRESETS, THEME_COLOR_KEYS, DEFAULT_DARK_COLORS, type ThemeColors, type ThemePreset } from './lib/theme';
 import './styles.css';
 
 const qc = new QueryClient();
@@ -31,6 +32,14 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 function useMe() { return React.useContext(AuthCtx); }
+
+function useActiveTheme() {
+  React.useEffect(() => {
+    fetch('/api/themes/active').then((r) => r.json()).then((j) => {
+      if (j.data?.colors) applyTheme(j.data.colors);
+    }).catch(() => {});
+  }, []);
+}
 
 function BrandLockup() {
   return (
@@ -180,10 +189,11 @@ function AdminSidebar() {
       </div>
       <div className="sidebar-heading">Infrastructure</div>
       <div className="sidebar-section" style={{ gap: 4 }}>
-        {L('/admin/nodes', 'Nodes', FiHardDrive)}{L('/admin/eggs', 'Eggs', FiBox)}{L('/admin/proxmox', 'Proxmox', FiCloud)}
+        {L('/admin/nodes', 'Nodes', FiHardDrive)}{L('/admin/eggs', 'Eggs', FiBox)}{L('/admin/proxmox', 'Proxmox', FiCloud)}{L('/admin/proxmox/templates', 'OS templates', FiBox)}
       </div>
       <div className="sidebar-heading">System</div>
       <div className="sidebar-section" style={{ gap: 4 }}>
+        {L('/admin/theme', 'Theme', FiLayout)}
         {L('/admin/audit', 'Audit logs', FiActivity)}
       </div>
     </nav>
@@ -269,7 +279,7 @@ function Shell({ children, me, onLogout }: { children: React.ReactNode; me: Me; 
   if (isAuth) return <>{children}</>;
   const isAdmin = loc.pathname.startsWith('/admin');
   const mLinks = isAdmin
-    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }]
+    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }, { to: '/admin/proxmox/templates', label: 'OS templates' }, { to: '/admin/theme', label: 'Theme' }, { to: '/admin/audit', label: 'Audit' }]
     : [{ to: '/', label: 'Overview' }, { to: '/settings', label: 'Settings' }];
   return (
     <div className="shell">
@@ -2369,7 +2379,7 @@ function ProxmoxPage() {
       <div className="table-wrap"><table className="table"><thead><tr><th>Cluster</th><th>Host</th><th>Status</th><th></th></tr></thead><tbody>{clusters.length === 0 ? <tr><td colSpan={4} className="muted">No clusters yet.</td></tr> : clusters.map((c) => {
         const h = health[c.id];
         const dot = h?.status === 'online' ? '#22c55e' : h?.status === 'error' ? '#ef4444' : '#3a3a3e';
-        return <tr key={c.id}><td>{c.name}</td><td className="mono muted" style={{ fontSize: 12 }}>{c.host}</td><td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />{h?.status || 'checking'}</span></td><td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><NavLink to={`/admin/proxmox/${c.id}`} className="btn btn-ghost btn-sm">Edit</NavLink><button className="btn btn-ghost btn-sm" onClick={() => nav(`/admin/proxmox/${c.id}`)}>Manage</button><button className="btn btn-ghost btn-sm" title="Delete cluster" onClick={() => del(c.id)}><FiTrash2 size={13} /></button></div></td></tr>;
+        return <tr key={c.id}><td>{c.name}</td><td className="mono muted" style={{ fontSize: 12 }}>{c.host}</td><td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />{h?.status || 'checking'}</span></td><td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><NavLink to={`/admin/proxmox/${c.id}`} className="btn btn-ghost btn-sm">Edit</NavLink><NavLink to={`/admin/proxmox/${c.id}/ips`} className="btn btn-ghost btn-sm">IPs</NavLink><button className="btn btn-ghost btn-sm" title="Delete cluster" onClick={() => del(c.id)}><FiTrash2 size={13} /></button></div></td></tr>;
       })}</tbody></table></div>
     </div>
   );
@@ -2377,32 +2387,292 @@ function ProxmoxPage() {
 
 function NewProxmoxClusterPage() {
   const nav = useNavigate();
+  const [step, setStep] = React.useState<1 | 2 | 3>(1);
   const [f, setF] = React.useState({ name: '', host: 'https://', api_token_id: '', api_token_secret: '', verify_tls: false });
-  const [err, setErr] = React.useState(''); const [msg, setMsg] = React.useState('');
-  async function create(e: React.FormEvent) {
-    e.preventDefault(); setErr(''); setMsg('');
-    const res = await fetch('/api/proxmox/clusters', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, host: f.host, api_token_id: f.api_token_id, api_token_secret: f.api_token_secret, verify_tls: f.verify_tls }) });
-    const j = await res.json();
-    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
-    nav('/admin/proxmox');
+  const [testing, setTesting] = React.useState(false);
+  const [discovered, setDiscovered] = React.useState<{ version: string | null; release: string | null; nodes: { node: string; status: string; cpu: number | null; mem: number | null; maxmem: number | null; uptime: number | null }[] } | null>(null);
+  const [err, setErr] = React.useState('');
+  const [creating, setCreating] = React.useState(false);
+  async function testConnection() {
+    setErr(''); setTesting(true); setDiscovered(null);
+    try {
+      const res = await fetch('/api/proxmox/clusters/test-connection', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: f.host, api_token_id: f.api_token_id, api_token_secret: f.api_token_secret, verify_tls: f.verify_tls }) });
+      const j = await res.json();
+      if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Connection failed'); return; }
+      setDiscovered(j.data);
+      setStep(2);
+    } catch { setErr('Network error — check host URL'); }
+    finally { setTesting(false); }
   }
+  async function create() {
+    setErr(''); setCreating(true);
+    try {
+      const res = await fetch('/api/proxmox/clusters', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, host: f.host, api_token_id: f.api_token_id, api_token_secret: f.api_token_secret, verify_tls: f.verify_tls }) });
+      const j = await res.json();
+      if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed to create'); return; }
+      nav('/admin/proxmox');
+    } finally { setCreating(false); }
+  }
+  function fmtBytes(b: number | null) { if (!b) return '—'; if (b < 1073741824) return `${Math.round(b / 1048576)} MB`; return `${(b / 1073741824).toFixed(1)} GB`; }
+  function fmtUptime(s: number | null) { if (!s) return '—'; const d = Math.floor(s / 86400); const h = Math.floor((s % 86400) / 3600); return d > 0 ? `${d}d ${h}h` : `${h}h`; }
   return (
     <div className="page" style={{ maxWidth: 720 }}>
-      <div className="page-head"><div><h1 className="h1">New Proxmox cluster</h1><p className="lede">Connect a PVE host. Like Nodes — host, token, TLS.</p></div><NavLink to="/admin/proxmox" className="btn btn-ghost btn-sm">Back</NavLink></div>
-      <Card title="Connection">
-        <form id="pve-new" onSubmit={create} className="form">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label className="field"><span className="label">Name</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="qyro-prod" required /></label>
-            <label className="field"><span className="label">Host</span><input className="input mono" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="https://pve.example:8006" required /></label>
+      <div className="page-head"><div><h1 className="h1">New Proxmox cluster</h1><p className="lede">Connect a PVE host — test, discover, create.</p></div><NavLink to="/admin/proxmox" className="btn btn-ghost btn-sm">Back</NavLink></div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {(['Connect', 'Discover', 'Create'] as const).map((label, i) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 26, height: 26, borderRadius: 999, display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, background: step > i + 1 ? '#22c55e' : step === i + 1 ? 'var(--text)' : 'var(--surface-2)', color: step === i + 1 ? 'var(--bg)' : step > i + 1 ? '#000' : 'var(--muted)' }}>{step > i + 1 ? '✓' : i + 1}</span>
+            <span style={{ fontSize: 13, fontWeight: step === i + 1 ? 600 : 400, color: step === i + 1 ? 'var(--text)' : 'var(--muted)' }}>{label}</span>
+            {i < 2 && <div style={{ width: 24, height: 1, background: 'var(--line)' }} />}
           </div>
-          <label className="field"><span className="label">API token ID</span><input className="input mono" value={f.api_token_id} onChange={(e) => setF({ ...f, api_token_id: e.target.value })} placeholder="lunixpanel@pve!panel" required /></label>
-          <label className="field"><span className="label">API token secret</span><input className="input mono" type="password" value={f.api_token_secret} onChange={(e) => setF({ ...f, api_token_secret: e.target.value })} required /></label>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={f.verify_tls} onChange={(e) => setF({ ...f, verify_tls: e.target.checked })} /> Verify TLS (uncheck for self-signed)</label>
+        ))}
+      </div>
+      {step === 1 && (
+        <Card title="Connection">
+          <form onSubmit={(e) => { e.preventDefault(); testConnection(); }} className="form">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <label className="field"><span className="label">Name</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="qyro-prod" required /></label>
+              <label className="field"><span className="label">Host</span><input className="input mono" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="https://pve.example:8006" required /></label>
+            </div>
+            <label className="field"><span className="label">API token ID</span><input className="input mono" value={f.api_token_id} onChange={(e) => setF({ ...f, api_token_id: e.target.value })} placeholder="lunixpanel@pve!panel" required /></label>
+            <label className="field"><span className="label">API token secret</span><input className="input mono" type="password" value={f.api_token_secret} onChange={(e) => setF({ ...f, api_token_secret: e.target.value })} required /></label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={f.verify_tls} onChange={(e) => setF({ ...f, verify_tls: e.target.checked })} /> Verify TLS (uncheck for self-signed)</label>
+            {err && <div className="alert alert-error" role="alert">{err}</div>}
+            <button className="btn btn-primary" type="submit" disabled={testing}>{testing ? 'Testing connection…' : 'Test & continue'}</button>
+          </form>
+        </Card>
+      )}
+      {step === 2 && discovered && (
+        <Card title="Discovered">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            <div><div className="label">PVE Version</div><div className="mono" style={{ fontSize: 13, marginTop: 4 }}>{discovered.version || '—'}</div></div>
+            <div><div className="label">Release</div><div className="mono" style={{ fontSize: 13, marginTop: 4 }}>{discovered.release || '—'}</div></div>
+          </div>
+          <div className="label" style={{ marginBottom: 8 }}>Nodes ({discovered.nodes.length})</div>
+          {discovered.nodes.length === 0 ? <p className="muted">No nodes found — check permissions.</p> : (
+            <div className="table-wrap"><table className="table"><thead><tr><th>Node</th><th>Status</th><th>CPU</th><th>Memory</th><th>Uptime</th></tr></thead><tbody>{discovered.nodes.map((n) => (
+              <tr key={n.node}>
+                <td className="mono" style={{ fontWeight: 600 }}>{n.node}</td>
+                <td><span className={`badge badge-${n.status === 'online' ? 'active' : 'suspended'}`}>{n.status}</span></td>
+                <td className="mono muted" style={{ fontSize: 12 }}>{n.cpu != null ? `${(n.cpu * 100).toFixed(1)}%` : '—'}</td>
+                <td className="mono muted" style={{ fontSize: 12 }}>{n.maxmem ? `${fmtBytes(n.mem)} / ${fmtBytes(n.maxmem)}` : '—'}</td>
+                <td className="mono muted" style={{ fontSize: 12 }}>{fmtUptime(n.uptime)}</td>
+              </tr>
+            ))}</tbody></table></div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button className="btn btn-ghost" onClick={() => { setStep(1); setDiscovered(null); }}>← Back</button>
+            <button className="btn btn-primary" onClick={() => setStep(3)} disabled={discovered.nodes.length === 0}>Continue →</button>
+          </div>
+        </Card>
+      )}
+      {step === 3 && (
+        <Card title="Review & create">
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div><div className="label">Name</div><div className="mono" style={{ fontSize: 13, marginTop: 4 }}>{f.name}</div></div>
+            <div><div className="label">Host</div><div className="mono" style={{ fontSize: 13, marginTop: 4 }}>{f.host}</div></div>
+            <div><div className="label">Token ID</div><div className="mono" style={{ fontSize: 13, marginTop: 4 }}>{f.api_token_id}</div></div>
+            <div><div className="label">TLS</div><div style={{ fontSize: 13, marginTop: 4 }}>{f.verify_tls ? 'Verified' : 'Self-signed (skip verify)'}</div></div>
+            <div><div className="label">Discovered nodes</div><div style={{ fontSize: 13, marginTop: 4 }}>{discovered?.nodes.map((n) => n.node).join(', ') || '—'}</div></div>
+          </div>
           {err && <div className="alert alert-error" role="alert">{err}</div>}
-          {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
-          <button className="btn btn-primary" type="submit">Create cluster</button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button className="btn btn-ghost" onClick={() => setStep(2)}>← Back</button>
+            <button className="btn btn-primary" onClick={create} disabled={creating}>{creating ? 'Creating…' : 'Create cluster'}</button>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function ProxmoxIpPoolPage() {
+  const { id } = useParams() as { id: string };
+  const cid = parseInt(id || '0', 10);
+  const nav = useNavigate();
+  const dialog = useConfirm();
+  const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
+  const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
+  const [rows, setRows] = React.useState<{ id: number; node: string; bridge: string; address: string; gateway: string | null; vlan: number | null; description: string | null; assigned: { vmid: number; type: string; user: { id: number; username: string } | null } | null }[]>([]);
+  const [form, setForm] = React.useState({ node: '', bridge: 'vmbr0', address: '', gateway: '', vlan: '', description: '' });
+  const [err, setErr] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const load = React.useCallback(() => {
+    fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => setCluster(j.data || null));
+    fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => setNodes(j.data || []));
+    fetch(`/api/proxmox/clusters/${cid}/ips`, { credentials: 'include' }).then((r) => r.json()).then((j) => setRows(j.data || []));
+  }, [cid]);
+  React.useEffect(() => { load(); }, [load]);
+  async function add(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setMsg('');
+    const res = await fetch(`/api/proxmox/clusters/${cid}/ips`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ node: form.node, bridge: form.bridge || 'vmbr0', address: form.address, gateway: form.gateway || undefined, vlan: form.vlan ? parseInt(form.vlan, 10) : undefined, description: form.description || undefined }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    setMsg('IP added to pool.'); setForm({ node: '', bridge: 'vmbr0', address: '', gateway: '', vlan: '', description: '' }); load();
+  }
+  async function remove(r: { id: number; address: string; assigned: unknown | null }) {
+    if (r.assigned) { setErr('IP is assigned — unassign its VM first.'); return; }
+    if (!await dialog.confirm({ title: 'Delete IP', message: `Remove ${r.address} from the pool? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
+    const res = await fetch(`/api/proxmox/clusters/${cid}/ips/${r.id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    setMsg(`${r.address} removed.`); load();
+  }
+  async function updateDesc(r: { id: number; description: string | null }) {
+    const val = await dialog.prompt({ title: 'Edit description', message: 'Description for this IP pool entry', defaultValue: r.description ?? '', placeholder: 'public-facing pool', confirmLabel: 'Save' });
+    if (val === null) return;
+    const res = await fetch(`/api/proxmox/clusters/${cid}/ips/${r.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: val || null }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    load();
+  }
+  return (
+    <div className="page">
+      <div className="page-head"><div><h1 className="h1">IP pool · {cluster?.name || `#${cid}`}</h1><p className="lede">Predefine reusable IPs like Node allocations — pick one when creating a VM instead of typing CIDR each time.</p></div><NavLink to={`/admin/proxmox/${cid}`} className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back to cluster</NavLink></div>
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <Card title="Add IP to pool">
+        <form onSubmit={add} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Node</span><select className="input" value={form.node} onChange={(e) => setForm({ ...form, node: e.target.value })} required><option value="">Choose node…</option>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
+            <label className="field"><span className="label">Bridge</span><input className="input mono" value={form.bridge} onChange={(e) => setForm({ ...form, bridge: e.target.value })} placeholder="vmbr0" required /></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Address (CIDR)</span><input className="input mono" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="10.0.0.10/24" required /></label>
+            <label className="field"><span className="label">Gateway (optional)</span><input className="input mono" value={form.gateway} onChange={(e) => setForm({ ...form, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">VLAN (optional)</span><input className="input mono" value={form.vlan} onChange={(e) => setForm({ ...form, vlan: e.target.value })} placeholder="100" /></label>
+            <label className="field"><span className="label">Description (optional)</span><input className="input mono" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="public-facing pool" /></label>
+          </div>
+          <button type="submit" className="btn btn-primary">Add IP</button>
         </form>
       </Card>
+      <div className="table-wrap"><table className="table"><thead><tr><th>Address</th><th>Node</th><th>Bridge</th><th>Gateway</th><th>VLAN</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={8} className="muted">No IPs in the pool.</td></tr> : rows.map((r) => <tr key={r.id}>
+            <td className="mono">{r.address}</td>
+            <td>{r.node}</td>
+            <td className="mono muted">{r.bridge}</td>
+            <td className="mono muted">{r.gateway || '—'}</td>
+            <td className="mono muted">{r.vlan || '—'}</td>
+            <td style={{ maxWidth: 240 }}>{r.description || <span className="muted">—</span>}</td>
+            <td>{r.assigned ? <span className="badge" style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}>VM {r.assigned.vmid} · {r.assigned.user?.username || '?'}</span> : <span className="badge" style={{ borderColor: '#22c55e', color: '#22c55e' }}>free</span>}</td>
+            <td style={{ whiteSpace: 'nowrap' }}><button className="btn btn-ghost btn-sm" onClick={() => updateDesc(r)}>Desc</button><button className="btn btn-ghost btn-sm" onClick={() => remove(r)}><FiTrash2 size={13} /></button></td>
+          </tr>)}</tbody></table></div>
+    </div>
+  );
+}
+
+function TemplatesPage() {
+  const nav = useNavigate();
+  const dialog = useConfirm();
+  const [rows, setRows] = React.useState<{ id: number; name: string; type: string; storage: string | null; iso: string | null; ostemplate: string | null; description: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; banner: string | null }[]>([]);
+  const [err, setErr] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const load = React.useCallback(() => fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setRows(j.data || [])), []);
+  React.useEffect(() => { load(); }, [load]);
+  async function del(t: { id: number; name: string }) {
+    if (!await dialog.confirm({ title: 'Delete template', message: `Delete preset “${t.name}”? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
+    const r = await fetch(`/api/proxmox/templates/${t.id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    setMsg(`Deleted “${t.name}”.`); load();
+  }
+  return (
+    <div className="page">
+      <div className="page-head"><div><h1 className="h1">OS templates</h1><p className="lede">Reusable presets like your Eggs — prefill ISO, OSTemplate, storage + default resources. The New VM page can use one to auto-fill your form.</p></div><NavLink to="/admin/proxmox/templates/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New template</NavLink></div>
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <div className="table-wrap"><table className="table"><thead><tr><th>Template</th><th>Type</th><th>Image / storage</th><th>Defaults</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={5} className="muted">No templates yet — create one.</td></tr> : rows.map((t) => <tr key={t.id}>
+            <td>{t.name}{t.description ? <div className="muted" style={{ fontSize: 12 }}>{t.description}</div> : null}</td>
+            <td className="mono muted">{t.type === 'qemu' ? 'QEMU' : 'LXC'}</td>
+            <td className="mono" style={{ fontSize: 12, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.type === 'qemu' ? t.iso : t.ostemplate}</td>
+            <td className="mono muted" style={{ fontSize: 12 }}>{t.defaultCores ? `${t.defaultCores} cores` : '—'} · {t.defaultMemory ? `${t.defaultMemory}MB` : '—'} · {t.defaultDisk ? `${t.defaultDisk}GB` : '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}><NavLink to={`/admin/proxmox/templates/${t.id}`} className="btn btn-ghost btn-sm">Edit</NavLink><button className="btn btn-ghost btn-sm" onClick={() => del(t)}><FiTrash2 size={13} /></button></td>
+          </tr>)}</tbody></table></div>
+    </div>
+  );
+}
+
+function TemplatesEditor() {
+  const { id } = useParams();
+  const editing = id !== undefined && id !== 'new';
+  const tid = Number(id);
+  const nav = useNavigate();
+  const [f, setF] = React.useState({ name: '', description: '', type: 'qemu' as 'qemu' | 'lxc', storage: '', iso: '', ostemplate: '', defaultCores: '2', defaultMemory: '2048', defaultDisk: '20', banner: '' });
+  const [err, setErr] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [loading, setLoading] = React.useState(editing);
+  React.useEffect(() => {
+    if (!editing) return;
+    fetch(`/api/proxmox/templates/${tid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => {
+      const t = j.data;
+      if (!t) return;
+      setF({
+        name: t.name || '', description: t.description || '', type: t.type || 'qemu',
+        storage: t.storage || '', iso: t.iso || '', ostemplate: t.ostemplate || '',
+        defaultCores: String(t.defaultCores || ''), defaultMemory: String(t.defaultMemory || ''), defaultDisk: String(t.defaultDisk || ''),
+        banner: t.banner || '',
+      });
+      setLoading(false);
+    }).catch(() => { setErr('Failed to load template'); setLoading(false); });
+  }, [editing, tid]);
+  async function save(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setMsg(''); setSaving(true);
+    const body: Record<string, unknown> = {
+      name: f.name.trim(), type: f.type, storage: f.storage || undefined, description: f.description || null,
+      iso: f.iso || undefined, ostemplate: f.ostemplate || undefined,
+      defaultCores: f.defaultCores ? parseInt(f.defaultCores, 10) : undefined,
+      defaultMemory: f.defaultMemory ? parseInt(f.defaultMemory, 10) : undefined,
+      defaultDisk: f.defaultDisk ? parseInt(f.defaultDisk, 10) : undefined,
+      banner: f.banner.trim() || undefined,
+    };
+    let j: Record<string, unknown>;
+    try {
+      const res = editing
+        ? await fetch(`/api/proxmox/templates/${tid}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        : await fetch('/api/proxmox/templates', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      j = await res.json().catch(() => ({ errors: [{ detail: 'Save failed' }] } as { errors?: { detail?: string }[] }));
+      const errors = j.errors as { detail?: string }[] | undefined;
+      if (!res.ok) throw new Error(String(errors?.[0]?.detail || 'Save failed'));
+    } catch (e2) { setErr(e2 instanceof Error ? e2.message : 'Save failed'); setSaving(false); return; }
+    setMsg(`Saved “${f.name.trim()}”.`); setSaving(false);
+    if (!editing) nav(`/admin/proxmox/templates/${(j.data as { id: number }).id}`, { replace: true });
+  }
+  if (loading) return <div className="page"><div className="lede">Loading template…</div></div>;
+  return (
+    <div className="page" style={{ maxWidth: 760 }}>
+      <div className="page-head"><div><h1 className="h1">{editing ? 'Edit template' : 'New template'}</h1><p className="lede">Reusable OS preset — like an Egg for Proxmox. Define once, pick when creating a VM.</p></div><div style={{ display: 'flex', gap: 8 }}><button className="btn btn-ghost btn-sm" onClick={() => nav('/admin/proxmox/templates')}>Templates</button><NavLink to="/admin/proxmox/templates" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink></div></div>
+      {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <form id="template-editor-form" onSubmit={save} className="form">
+        <Card title="Basics">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Name</span><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ubuntu 22.04" required /></label>
+            <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC (container)</option></select></label>
+          </div>
+          <label className="field"><span className="label">Description</span><input className="input" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="Ubuntu 22.04 image preset" /></label>
+          <label className="field"><span className="label">Banner image URL</span><input className="input mono" value={f.banner} onChange={(e) => setF({ ...f, banner: e.target.value })} placeholder="https://…/banner.png" /></label>
+          {f.banner && <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--line)', maxWidth: 420 }}><img src={f.banner} alt="Banner preview" style={{ width: '100%', display: 'block' }} /></div>}
+        </Card>
+        <Card title="OS image">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Storage</span><input className="input mono" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })} placeholder="local-lvm / local" /></label>
+            {f.type === 'qemu'
+              ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
+              : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard.tar.zst" /></label>}
+          </div>
+        </Card>
+        <Card title="Default resources">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Default vCPU cores</span><input className="input mono" value={f.defaultCores} onChange={(e) => setF({ ...f, defaultCores: e.target.value })} placeholder="2" /></label>
+            <label className="field"><span className="label">Default RAM (MB)</span><input className="input mono" value={f.defaultMemory} onChange={(e) => setF({ ...f, defaultMemory: e.target.value })} placeholder="2048" /></label>
+            <label className="field"><span className="label">Default disk (GB)</span><input className="input mono" value={f.defaultDisk} onChange={(e) => setF({ ...f, defaultDisk: e.target.value })} placeholder="20" /></label>
+          </div>
+        </Card>
+        {err && <div className="alert alert-error" role="alert">{err}</div>}
+        <div><button className="btn btn-primary" form="template-editor-form" disabled={saving}>{saving ? 'Saving…' : (editing ? 'Save template' : 'Create template')}</button></div>
+      </form>
     </div>
   );
 }
@@ -2456,6 +2726,10 @@ function ClusterEditorPage() {
           <div style={{ display: 'flex', gap: 8 }}><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save cluster'}</button><NavLink to="/admin/proxmox" className="btn btn-ghost">Clusters</NavLink></div>
         </form>
       </Card>
+      <Card title="IP pool">
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Define reusable addresses to pick when creating a VM instead of typing CIDR each time.</p>
+        <NavLink to={`/admin/proxmox/${id}/ips`} className="btn btn-ghost">Manage IPs</NavLink>
+      </Card>
       <Card title="Danger zone">
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Deleting removes the secret and assignment guard (must unassign VMs first).</p>
         <button className="btn btn-danger" onClick={del}>Delete cluster</button>
@@ -2473,14 +2747,27 @@ function NewVpsPage() {
   const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
   const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
   const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
-  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ip: 'dhcp', gateway: '', nameserver: '', searchdomain: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
+  const [ipPools, setIpPools] = React.useState<{ id: number; node: string; bridge: string; address: string; gateway: string | null; vlan: number | null }[]>([]);
+  const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; storage: string | null; iso: string | null; ostemplate: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; banner: string | null }[]>([]);
+  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'custom' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: 'dhcp', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
   const [adv, setAdv] = React.useState(false);
   const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
-  React.useEffect(() => { fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data)).catch(() => {}); fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setNodes(j.data); if (j.data[0]?.node) setF((p) => ({ ...p, node: j.data[0].node })); } }).catch(() => {}); fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])).catch(() => {}); }, [cid]);
+  React.useEffect(() => { fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data)).catch(() => {}); fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setNodes(j.data); if (j.data[0]?.node) setF((p) => ({ ...p, node: j.data[0].node })); } }).catch(() => {}); fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])).catch(() => {}); fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates(j.data || [])).catch(() => {}); }, [cid]);
   React.useEffect(() => {
     if (!f.node) return;
     fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }).catch(() => {});
   }, [cid, f.node]);
+  React.useEffect(() => {
+    if (!f.node) return;
+    fetch(`/api/proxmox/clusters/${cid}/ips?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => setIpPools((j.data || []).filter((i: { assigned: unknown }) => !i.assigned))).catch(() => {});
+  }, [cid, f.node]);
+  React.useEffect(() => {
+    if (f.templatePreset) {
+      const t = templates.find((t) => String(t.id) === f.templatePreset);
+      if (!t) return;
+      setF((p) => ({ ...p, type: t.type as 'qemu' | 'lxc', storage: t.storage || p.storage, iso: t.iso || p.iso, ostemplate: t.ostemplate || p.ostemplate, cores: t.defaultCores ? String(t.defaultCores) : p.cores, memory: t.defaultMemory ? String(t.defaultMemory) : p.memory, disk: t.defaultDisk ? String(t.defaultDisk) : p.disk }));
+    }
+  }, [f.templatePreset, templates]);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setSaving(true);
     const body: Record<string, unknown> = { node: f.node, type: f.type };
@@ -2493,11 +2780,16 @@ function NewVpsPage() {
     if (f.storage) body.storage = f.storage;
     if (f.bridge) body.bridge = f.bridge;
     if (f.vlan) body.vlan = parseInt(f.vlan, 10);
-    if (f.ip) body.ip = f.ip.trim();
+    if (f.ipMode === 'pool' && f.ipPool) {
+      body.ipPoolId = parseInt(f.ipPool, 10);
+    } else if (f.ip && f.ip !== 'dhcp') {
+      body.ip = f.ip.trim();
+    }
     if (f.gateway) body.gateway = f.gateway.trim();
     if (f.nameserver) body.nameserver = f.nameserver.trim();
     if (f.iso) body.iso = f.iso.trim();
     if (f.ostemplate) body.ostemplate = f.ostemplate.trim();
+    if (f.templatePreset) body.templateId = parseInt(f.templatePreset, 10);
     if (f.sshkeys) body.sshkeys = f.sshkeys;
     if (f.userId) body.userId = parseInt(f.userId, 10);
     const r = await fetch(`/api/proxmox/clusters/${cid}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -2534,17 +2826,38 @@ function NewVpsPage() {
         </div>
       </Card>
       <Card title="Network — assign IP">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label className="field"><span className="label">Bridge</span><input className="input mono" value={f.bridge} onChange={(e) => setF({ ...f, bridge: e.target.value })} placeholder="vmbr0" /></label>
           <label className="field"><span className="label">VLAN (optional)</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="100" /></label>
-          <label className="field"><span className="label">IP</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="dhcp or 10.0.0.10/24" /></label>
         </div>
+        {f.node && ipPools.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <label className="field"><span className="label">IP address</span><select className="input" value={f.ipMode} onChange={(e) => setF({ ...f, ipMode: e.target.value as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: 'dhcp', gateway: '' })}>
+              <option value="dhcp">DHCP (no IP from pool)</option>
+              <option value="pool">From IP pool</option>
+              <option value="custom">Custom CIDR</option>
+            </select></label>
+            {f.ipMode === 'pool' && (
+              <label className="field"><span className="label">Pool entry</span><select className="input mono" value={f.ipPool} onChange={(e) => { const p = ipPools.find((i) => String(i.id) === e.target.value); setF({ ...f, ipPool: e.target.value, ip: p?.address || '', bridge: p?.bridge || f.bridge, gateway: p?.gateway || '', vlan: p?.vlan ? String(p.vlan) : '' }); }}><option value="">Choose…</option>{ipPools.map((p) => <option key={p.id} value={p.id}>{p.address} ({p.bridge})</option>)}</select></label>
+            )}
+          </div>
+        )}
+        {(!f.node || ipPools.length === 0) && (
+          <label className="field"><span className="label">IP mode</span><select className="input" value={f.ipMode} onChange={(e) => setF({ ...f, ipMode: e.target.value as 'dhcp' | 'pool' | 'custom', ip: 'dhcp' })}><option value="dhcp">DHCP</option><option value="custom">Custom CIDR</option><option value="pool" disabled={ipPools.length === 0}>Pool (none free for this node)</option></select></label>
+        )}
+        {f.ipMode === 'custom' && (
+          <label className="field"><span className="label">IP address</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="dhcp or 10.0.0.10/24" /></label>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
           <label className="field"><span className="label">Nameserver (DNS)</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
         </div>
       </Card>
       <Card title="OS / template">
+        {templates.length > 0 && (
+          <label className="field"><span className="label">Template preset (optional)</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none, choose manually —</option>{templates.filter((t) => t.type === f.type || f.type === 'qemu' && t.type === 'qemu' || f.type === 'lxc' && t.type === 'lxc').map((t) => <option key={t.id} value={t.id}>{t.name} ({t.type === 'qemu' ? 'QEMU' : 'LXC'})</option>)}</select></label>
+        )}
+        <label className="field"><span className="label">OS image source</span><select className="input" value={f.type === 'qemu' ? 'iso' : 'ostemplate'} onChange={(e) => setF({ ...f, type: e.target.value === 'iso' ? 'qemu' : 'lxc', iso: '', ostemplate: '' })} style={{ maxWidth: 240, marginBottom: 10 }}><option value="iso">QEMU (ISO install)</option><option value="ostemplate">LXC (template)</option></select></label>
         {f.type === 'qemu' ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label> : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>}
         <label className="field"><span className="label">SSH keys (optional)</span><textarea className="input mono textarea" rows={3} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdv(!adv)}>{adv ? 'Hide advanced' : 'Show advanced'}</button>
@@ -2556,7 +2869,295 @@ function NewVpsPage() {
   );
 }
 
+type Theme = {
+  id: number;
+  slug: string;
+  name: string;
+  mode: string;
+  colors: Record<string, string>;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function ThemeManager() {
+  const [themes, setThemes] = React.useState<Theme[] | null>(null);
+  const [modalOpen, setModalOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<Theme | null>(null);
+  const toast = useToast()!;
+  const dialog = useConfirm();
+
+  const load = React.useCallback(() => {
+    fetch('/api/themes', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((j) => { if (j.data) setThemes(j.data); })
+      .catch(() => setThemes([]));
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  async function setActive(id: number) {
+    const res = await fetch(`/api/themes/${id}`, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: true }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) toast.show(j.errors?.[0]?.detail || 'Failed to activate');
+    else { applyTheme(j.data.colors); toast.show('Theme activated'); load(); }
+  }
+
+  async function deleteTheme(id: number) {
+    const ok = await dialog.confirm({
+      title: 'Delete theme',
+      message: 'This will remove the theme permanently. You cannot undo this.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/themes/${id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) toast.show(j.errors?.[0]?.detail || 'Failed to delete');
+    else { toast.show('Theme deleted'); load(); }
+  }
+
+  async function saveTheme(name: string, mode: 'dark' | 'light', colors: Record<string, string>, isActive: boolean) {
+    const slug = editing ? editing.slug : slugify(name);
+    const url = editing ? `/api/themes/${editing.id}` : '/api/themes';
+    const method = editing ? 'PATCH' : 'POST';
+    const res = await fetch(url, {
+      method, credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, slug, mode, colors, isActive }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) toast.show(j.errors?.[0]?.detail || 'Failed to save');
+    else { if (j.data?.colors) applyTheme(j.data.colors); toast.show(editing ? 'Theme updated' : 'Theme created'); setModalOpen(false); load(); }
+  }
+
+  function slugify(name: string): string {
+    return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'theme';
+  }
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="h1">Theme</h1>
+          <p className="lede">Define and switch between named color themes. Changes apply panel-wide.</p>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => { setEditing(null); setModalOpen(true); }}><FiPlus size={13} /> Add theme</button>
+      </div>
+      {!themes ? <Skeleton lines={4} /> : themes.length === 0 ? (
+        <div className="empty"><div className="empty-title">No themes</div><div className="empty-body">No themes defined yet.</div></div>
+      ) : (
+        <div className="server-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+          {themes.map((t) => <ThemeCard key={t.id} theme={t} onSetActive={() => setActive(t.id)} onEdit={() => { setEditing(t); setModalOpen(true); }} onDelete={() => deleteTheme(t.id)} />)}
+        </div>
+      )}
+      <ThemeEditorModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSave={saveTheme}
+        theme={editing}
+      />
+    </div>
+  );
+}
+
+function ThemeCard({ theme, onSetActive, onEdit, onDelete }: {
+  theme: Theme;
+  onSetActive: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const c = theme.colors;
+  return (
+    <div className="server-card" style={{
+      borderRadius: 12,
+      border: `1px solid ${c.line || 'var(--line)'}`,
+      background: `linear-gradient(160deg, ${c.bg || '#0a0a0a'} 0%, ${c.bgSoft || '#131315'} 100%)`,
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.35)',
+    }}>
+      <div style={{ padding: 10, paddingBottom: 6, borderBottom: `1px solid ${c.line || 'var(--line)'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: c.text || 'var(--text)' }}>{theme.name}</div>
+          <div style={{ fontSize: 11, color: c.muted || 'var(--muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {theme.mode === 'dark' ? <><FiMoon size={10} /> Dark</> : <><FiSun size={10} /> Light</>}
+          </div>
+        </div>
+        {theme.isActive && <span className="badge badge-admin" style={{ fontSize: 10, padding: '3px 7px' }}><FiCheck size={10} /> Active</span>}
+      </div>
+      <div style={{ padding: '8px 12px' }}>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+          {(Object.keys(c) as (keyof ThemeColors)[]).map((key) => (
+            <div key={key} style={{
+              width: 20, height: 20, borderRadius: 4,
+              background: c[key],
+              border: `1px solid ${c.lineStrong || 'var(--line-strong)'}`,
+            }} title={key} />
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {!theme.isActive && <button className="btn btn-ghost btn-sm" onClick={onSetActive}><FiLayout size={13} /> Use</button>}
+          <button className="btn btn-ghost btn-sm" onClick={onEdit}><FiEdit3 size={13} /> Edit</button>
+          <button className="btn btn-ghost btn-sm" onClick={onDelete} disabled={theme.isActive} title={theme.isActive ? 'Cannot delete the active theme' : 'Delete'}><FiTrash2 size={13} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemeEditorModal({ open, onClose, onSave, theme }: {
+  open: boolean;
+  onClose: () => void;
+  onSave: (name: string, mode: 'dark' | 'light', colors: Record<string, string>, isActive: boolean) => void;
+  theme: Theme | null;
+}) {
+  const isNew = !theme;
+  const [name, setName] = React.useState('');
+  const [mode, setMode] = React.useState<'dark' | 'light'>('dark');
+  const [colors, setColors] = React.useState<Record<string, string>>({});
+  const [presetName, setPresetName] = React.useState('');
+  const [active, setActive] = React.useState(false);
+
+  React.useEffect(() => {
+    if (theme) {
+      setName(theme.name);
+      setMode(theme.mode as 'dark' | 'light');
+      setColors({ ...DEFAULT_DARK_COLORS, ...theme.colors });
+      setPresetName(theme.name);
+      setActive(theme.isActive);
+    } else {
+      setName('');
+      setMode('dark');
+      setColors(DEFAULT_DARK_COLORS);
+      setPresetName('Dark');
+      setActive(false);
+    }
+  }, [theme]);
+
+  function updateColor(key: keyof ThemeColors, val: string) {
+    setColors({ ...colors, [key]: val });
+  }
+
+  function applyPreset(p: ThemePreset) {
+    setPresetName(p.name);
+    setMode(p.mode);
+    setColors(p.colors);
+  }
+
+  const safeColor = (key: keyof ThemeColors): string => {
+    const val = colors[key];
+    if (/^#[0-9a-f]{6}$/i.test(val || '')) return val!;
+    return mode === 'light' ? '#ffffff' : '#000000';
+  };
+
+  const footer = (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+      <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary btn-sm" onClick={() => onSave(name, mode, colors, active)} disabled={!name.trim()}>{isNew ? 'Create' : 'Save'}</button>
+    </div>
+  );
+
+  return (
+    <Modal open={open} onClose={onClose} title={isNew ? 'New theme' : `Edit "${theme?.name}"`} footer={footer} size="lg">
+      <div style={{ display: 'grid', gap: 16 }}>
+        {/* Name + Mode */}
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+          <label className="field">
+            <span className="label">Theme name</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Desert Dream" />
+          </label>
+          <div>
+            <div className="label" style={{ marginBottom: 6 }}>Mode</div>
+            <div className="seg-toggle">
+              <button type="button" className={`seg-btn ${mode === 'dark' ? 'active' : ''}`} onClick={() => setMode('dark')}><FiMoon size={13} /> Dark</button>
+              <button type="button" className={`seg-btn ${mode === 'light' ? 'active' : ''}`} onClick={() => setMode('light')}><FiSun size={13} /> Light</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Active toggle (edit mode only) */}
+        {theme && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} style={{ width: 14, height: 14, accentColor: 'var(--accent)' }} />
+            <span className="label" style={{ marginBottom: 0 }}>Set as active theme</span>
+          </label>
+        )}
+
+        {/* Preset selector */}
+        <label className="field">
+          <span className="label">Preset</span>
+          <select className="input" value={presetName} onChange={(e) => {
+            const p = THEME_PRESETS.find(p => p.name === e.target.value);
+            if (p) applyPreset(p);
+          }}>
+            {THEME_PRESETS.map((p) => <option key={p.name} value={p.name}>{p.name} ({p.mode})</option>)}
+          </select>
+        </label>
+
+        {/* Color pickers */}
+        <div className="stack">
+          <div className="kicker" style={{ fontSize: 11 }}>Palette</div>
+          {THEME_COLOR_KEYS.map((key) => {
+            const val = colors[key] || '';
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 90, fontSize: 12, color: 'var(--muted)' }}>{key}</div>
+                <input
+                  type="color"
+                  value={safeColor(key)}
+                  onChange={(e) => updateColor(key, e.target.value)}
+                  style={{ width: 42, height: 28, borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, border: 'none' }}
+                />
+                <input
+                  type="text"
+                  className="mono"
+                  value={val}
+                  onChange={(e) => updateColor(key, e.target.value)}
+                  placeholder="#000000"
+                  style={{ width: 100, fontSize: 12, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-soft)', color: 'var(--text)' }}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Live preview */}
+        <div className="stack">
+          <div className="kicker" style={{ fontSize: 11 }}>Preview</div>
+          <div style={{
+            border: `1px solid ${colors.line || 'var(--line)'}`,
+            borderRadius: 12,
+            background: colors.bgSoft || 'var(--bg-soft)',
+            padding: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: colors.accent, flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: colors.text }}>{name || 'Theme name'}</div>
+                <div style={{ fontSize: 11, color: colors.muted }}>{presetName || 'Preset'} · {mode}</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+              <button style={{ appearance: 'none', border: `1px solid ${colors.lineStrong}`, padding: '6px 12px', borderRadius: '999px', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: colors.surface, color: colors.text }}>Button</button>
+              <button style={{ appearance: 'none', border: `1px solid ${colors.accent}`, padding: '6px 12px', borderRadius: '999px', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: colors.accent, color: colors.bg }}>Primary</button>
+              <button style={{ appearance: 'none', border: 'none', padding: '6px 12px', borderRadius: '999px', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: colors.muted }}>Ghost</button>
+            </div>
+            <div style={{ fontSize: 12, color: colors.text, lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 600, color: colors.text, marginBottom: 4 }}>Sample card</div>
+              <div style={{ color: colors.muted2 }}>This is a preview of how your theme will look in the panel.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function AppInner() {
+  useActiveTheme();
   const nav = useNavigate();
   const { me, refresh } = useMe();
   const logout = async () => { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); await refresh(); nav('/login'); };
@@ -2583,11 +3184,16 @@ function AppInner() {
         <Route path="/admin/eggs" element={<RequireAuth adminOnly><EggsPage /></RequireAuth>} />
         <Route path="/admin/eggs/new" element={<RequireAuth adminOnly><EggEditor /></RequireAuth>} />
         <Route path="/admin/eggs/:id" element={<RequireAuth adminOnly><EggEditor /></RequireAuth>} />
+        <Route path="/admin/proxmox/templates" element={<RequireAuth adminOnly><TemplatesPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/templates/new" element={<RequireAuth adminOnly><TemplatesEditor /></RequireAuth>} />
+        <Route path="/admin/proxmox/templates/:id" element={<RequireAuth adminOnly><TemplatesEditor /></RequireAuth>} />
         <Route path="/admin/proxmox" element={<RequireAuth adminOnly><ProxmoxPage /></RequireAuth>} />
         <Route path="/admin/proxmox/new" element={<RequireAuth adminOnly><NewProxmoxClusterPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/:clusterId/ips" element={<RequireAuth adminOnly><ProxmoxIpPoolPage /></RequireAuth>} />
         <Route path="/admin/proxmox/:id" element={<RequireAuth adminOnly><ClusterEditorPage /></RequireAuth>} />
         <Route path="/admin/proxmox/:clusterId/vms/new" element={<RequireAuth adminOnly><NewVpsPage /></RequireAuth>} />
         <Route path="/admin/audit" element={<RequireAuth adminOnly><AuditPage /></RequireAuth>} />
+        <Route path="/admin/theme" element={<RequireAuth adminOnly><ThemeManager /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>

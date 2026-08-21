@@ -15,6 +15,7 @@ import nodeRoutes from './modules/nodes/index.js';
 import serverRoutes from './modules/servers/index.js';
 import remoteRoutes from './modules/remote/index.js';
 import settingsRoutes from './modules/settings/index.js';
+import themeRoutes from './modules/themes/index.js';
 import auditRoutes from './modules/audit/index.js';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://lunix:lunix@localhost:5432/lunixpanel';
@@ -67,6 +68,7 @@ if (db) {
   app.route('/api/nodes', nodeRoutes(db));
   app.route('/api/servers', serverRoutes(db));
   app.route('/api/settings', settingsRoutes(db));
+  app.route('/api/themes', themeRoutes(db));
   app.route('/api/audit', auditRoutes(db));
 
   app.get('/api/me', requireAuth, async (c) => {
