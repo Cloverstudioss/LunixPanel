@@ -82,6 +82,31 @@ function Topbar({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
 const ToastCtx = React.createContext<{ show: (msg: string) => void } | null>(null);
 function useToast() { return React.useContext(ToastCtx); }
+
+function SelectOrCustom({ label, value, onChange, options, placeholder, required }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder?: string; required?: boolean }) {
+  const isCustom = value !== '' && !options.some((o) => o.value === value);
+  const [mode, setMode] = React.useState<'select' | 'custom'>(isCustom ? 'custom' : 'select');
+  React.useEffect(() => { if (value === '' && mode === 'custom') setMode('select'); }, [value, mode]);
+  return (
+    <label className="field">
+      <span className="label">{label}</span>
+      {mode === 'select' ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <select className="input" style={{ flex: 1 }} value={value} onChange={(e) => { if (e.target.value === '__custom__') { setMode('custom'); onChange(''); } else onChange(e.target.value); }} required={required}>
+            <option value="">{placeholder || 'Choose\u2026'}</option>
+            {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            <option value="__custom__">\u2719 Custom\u2026</option>
+          </select>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input className="input mono" style={{ flex: 1 }} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} required={required} />
+          {options.length > 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setMode('select'); onChange(options[0]?.value || ''); }} style={{ whiteSpace: 'nowrap' }}>From list</button>}
+        </div>
+      )}
+    </label>
+  );
+}
 function ToastProvider({ children }: { children: React.ReactNode }) {
   const [msg, setMsg] = React.useState<string | null>(null);
   const timer = React.useRef<number | null>(null);
@@ -2834,6 +2859,7 @@ function CreateVmPage() {
   const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
   const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
   const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
+  const [ipPool, setIpPool] = React.useState<{ id: number; address: string; node: string; bridge: string; gateway: string | null; vlan: number | null; description: string | null; assigned: boolean }[]>([]);
   const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
   const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; iso: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; storage: string | null }[]>([]);
   const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number }[]>([]);
@@ -2843,6 +2869,7 @@ function CreateVmPage() {
     fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data));
     fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data) && j.data[0]) { setNodes(j.data); setF((p) => ({ ...p, node: j.data[0].node })); } });
     fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || []));
+    fetch(`/api/proxmox/clusters/${cid}/ips`, { credentials: 'include' }).then((r) => r.json()).then((j) => setIpPool(j.data || []));
     fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates((j.data || []).filter((t: { type: string }) => t.type === 'qemu')));
   }, [cid]);
   React.useEffect(() => { if (f.node) fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }); }, [cid, f.node]);
@@ -2892,7 +2919,7 @@ function CreateVmPage() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
-          <label className="field"><span className="label">Storage</span>{storages.length > 0 ? <select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}><option value="">Choose storage…</option>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select> : <input className="input mono" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })} placeholder="local-lvm" />}</label>
+          <SelectOrCustom label="Storage" value={f.storage} onChange={(v) => setF({ ...f, storage: v })} options={storages.map((s) => ({ value: s.storage, label: `${s.storage} (${s.type})` }))} placeholder="local-lvm" required />
         </div>
       </Card>
       <Card title="Network">
@@ -2901,7 +2928,7 @@ function CreateVmPage() {
           <label className="field"><span className="label">VLAN</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="optional" /></label>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <label className="field"><span className="label">IP (CIDR or dhcp)</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="10.0.0.10/24" /></label>
+          <SelectOrCustom label="IP (CIDR or dhcp)" value={f.ip} onChange={(v) => setF({ ...f, ip: v })} options={ipPool.filter((p) => !p.assigned).map((p) => ({ value: p.address, label: `${p.address}${p.description ? ' \u2014 ' + p.description : ''}` }))} placeholder="10.0.0.10/24 or dhcp" />
           <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
         </div>
         <label className="field"><span className="label">DNS</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
@@ -2929,6 +2956,7 @@ function CreateLxcPage() {
   const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
   const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
   const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
+  const [ipPool, setIpPool] = React.useState<{ id: number; address: string; node: string; bridge: string; gateway: string | null; vlan: number | null; description: string | null; assigned: boolean }[]>([]);
   const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
   const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; ostemplate: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; storage: string | null }[]>([]);
   const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number }[]>([]);
@@ -2938,6 +2966,7 @@ function CreateLxcPage() {
     fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data));
     fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data) && j.data[0]) { setNodes(j.data); setF((p) => ({ ...p, node: j.data[0].node })); } });
     fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || []));
+    fetch(`/api/proxmox/clusters/${cid}/ips`, { credentials: 'include' }).then((r) => r.json()).then((j) => setIpPool(j.data || []));
     fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates((j.data || []).filter((t: { type: string }) => t.type === 'lxc')));
   }, [cid]);
   React.useEffect(() => { if (f.node) fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }); }, [cid, f.node]);
@@ -2984,7 +3013,7 @@ function CreateLxcPage() {
           <label className="field"><span className="label">RAM (MB)</span><input className="input mono" value={f.memory} onChange={(e) => setF({ ...f, memory: e.target.value })} /></label>
           <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
         </div>
-        <label className="field"><span className="label">Storage</span>{storages.length > 0 ? <select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}><option value="">Choose storage…</option>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select> : <input className="input mono" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })} placeholder="local-lvm" />}</label>
+        <SelectOrCustom label="Storage" value={f.storage} onChange={(v) => setF({ ...f, storage: v })} options={storages.map((s) => ({ value: s.storage, label: `${s.storage} (${s.type})` }))} placeholder="local-lvm" required />
       </Card>
       <Card title="Network">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -2992,7 +3021,7 @@ function CreateLxcPage() {
           <label className="field"><span className="label">VLAN</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="optional" /></label>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <label className="field"><span className="label">IP (CIDR or dhcp)</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="10.0.0.10/24 or dhcp" /></label>
+          <SelectOrCustom label="IP (CIDR or dhcp)" value={f.ip} onChange={(v) => setF({ ...f, ip: v })} options={ipPool.filter((p) => !p.assigned).map((p) => ({ value: p.address, label: `${p.address}${p.description ? ' \u2014 ' + p.description : ''}` }))} placeholder="10.0.0.10/24 or dhcp" />
           <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
         </div>
         <label className="field"><span className="label">DNS</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
