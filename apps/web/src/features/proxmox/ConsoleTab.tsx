@@ -49,6 +49,17 @@ export default function ConsoleTab({ vps, vmType }: ConsoleProps) {
       ws.binaryType = 'arraybuffer';
 
       const rfb = new RFB(mountRef.current!, ws, { shared: false });
+      // Over plain HTTP, Firefox throws a SecurityError when noVNC assigns its
+      // canvas cursor (data: URL) — the exception escapes RFB's message handler
+      // and stalls the whole session. Swallow it; only the remote cursor visual
+      // is lost (system cursor is used instead).
+      const cursor = rfb._cursor as { change?: (...a: unknown[]) => void; clear?: (...a: unknown[]) => void } | undefined;
+      if (cursor) {
+        for (const fnName of ['change', 'clear'] as const) {
+          const orig = cursor[fnName]?.bind(cursor);
+          if (orig) cursor[fnName] = (...args: unknown[]) => { try { orig(...args); } catch { /* ignore */ } };
+        }
+      }
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.background = '#0b0b0d';
