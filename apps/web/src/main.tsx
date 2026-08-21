@@ -538,9 +538,6 @@ function VpsManage() {
   const cfg = data.config as Record<string, unknown>;
   const st = data.status as Record<string, unknown>;
   const ip = String(cfg.ip || cfg.net0 || '').match(/(\d+\.\d+\.\d+\.\d+)/)?.[1] || '';
-  const memBytes = typeof st.maxmem === 'number' ? st.maxmem : typeof cfg.memory === 'number' ? cfg.memory * 1024 * 1024 : 0;
-  const memGB = (memBytes / (1024 * 1024 * 1024)).toFixed(1);
-  const diskGB = typeof st.maxdisk === 'number' ? (st.maxdisk / (1024 * 1024 * 1024)).toFixed(0) : '?';
   const cpuCores = typeof cfg.cores === 'number' ? cfg.cores : typeof st.cpus === 'number' ? st.cpus : '?';
   return (
     <div className="page">
@@ -572,13 +569,7 @@ function VpsManage() {
       </div>
       {tab === 'overview' && (
         <div className="stack">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-            <Card title="CPU"><div style={{ fontSize: 22, fontWeight: 700 }}>{cpuCores} cores</div><div className="muted" style={{ fontSize: 12 }}>{data.assignment.type === 'qemu' ? 'QEMU' : 'LXC'}</div></Card>
-            <Card title="Memory"><div style={{ fontSize: 22, fontWeight: 700 }}>{memGB} GB</div><div className="muted" style={{ fontSize: 12 }}>{(memBytes / (1024 * 1024)).toFixed(0)} MB</div></Card>
-            <Card title="Disk"><div style={{ fontSize: 22, fontWeight: 700 }}>{diskGB} GB</div><div className="muted" style={{ fontSize: 12 }}>Proxmox storage</div></Card>
-            {ip && <Card title="IP Address"><div className="mono" style={{ fontSize: 16, fontWeight: 700 }}>{ip}</div><div className="muted" style={{ fontSize: 12 }}>Network interface</div></Card>}
-          </div>
-          <PveOverviewCards vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={data.status} />
+          <PveOverviewCards vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={{ ...data.status, cpus: data.status.cpus ?? cpuCores }} />
           {me?.isAdmin && (
             <details>
               <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>Raw status / config (debug)</summary>
