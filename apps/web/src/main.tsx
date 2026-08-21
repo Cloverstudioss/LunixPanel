@@ -185,7 +185,7 @@ function AdminSidebar() {
       <PanelSwitch />
       <div className="sidebar-section">
         <div className="sidebar-heading">Manage</div>
-        {L('/admin', 'Overview', FiGrid)}{L('/admin/users', 'Users', FiUsers)}{L('/admin/servers', 'Servers', FiServer)}
+        {L('/admin', 'Overview', FiGrid)}{L('/admin/users', 'Users', FiUsers)}{L('/admin/servers', 'Servers', FiServer)}{L('/admin/vms', 'VMs / VPS', FiCloud)}
       </div>
       <div className="sidebar-heading">Infrastructure</div>
       <div className="sidebar-section" style={{ gap: 4 }}>
@@ -279,7 +279,7 @@ function Shell({ children, me, onLogout }: { children: React.ReactNode; me: Me; 
   if (isAuth) return <>{children}</>;
   const isAdmin = loc.pathname.startsWith('/admin');
   const mLinks = isAdmin
-    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }, { to: '/admin/proxmox/templates', label: 'OS templates' }, { to: '/admin/theme', label: 'Theme' }, { to: '/admin/audit', label: 'Audit' }]
+    ? [{ to: '/admin', label: 'Overview' }, { to: '/admin/users', label: 'Users' }, { to: '/admin/servers', label: 'Servers' }, { to: '/admin/vms', label: 'VMs / VPS' }, { to: '/admin/nodes', label: 'Nodes' }, { to: '/admin/eggs', label: 'Eggs' }, { to: '/admin/proxmox', label: 'Proxmox' }, { to: '/admin/proxmox/templates', label: 'OS templates' }, { to: '/admin/theme', label: 'Theme' }, { to: '/admin/audit', label: 'Audit' }]
     : [{ to: '/', label: 'Overview' }, { to: '/settings', label: 'Settings' }];
   return (
     <div className="shell">
@@ -2770,6 +2770,249 @@ function ClusterEditorPage() {
   );
 }
 
+function AdminVmsPage() {
+  const dialog = useConfirm();
+  const [clusters, setClusters] = React.useState<{ id: number; name: string }[]>([]);
+  const [clusterId, setClusterId] = React.useState<number | null>(null);
+  const [vms, setVms] = React.useState<{ node: string; type: string; vmid: number; name: string; status: string; assignmentId: number | null; ownerId: number | null; owner: { id: number; username: string } | null }[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => { fetch('/api/proxmox/clusters', { credentials: 'include' }).then((r) => r.json()).then((j) => { const c = j.data || []; setClusters(c); if (c[0]) setClusterId(c[0].id); }).catch(() => {}); }, []);
+  React.useEffect(() => {
+    if (!clusterId) return;
+    setLoading(true);
+    fetch(`/api/proxmox/clusters/${clusterId}/vms`, { credentials: 'include' }).then((r) => r.json()).then((j) => { setVms(j.data || []); setLoading(false); }).catch(() => setLoading(false));
+  }, [clusterId]);
+  async function vmAction(node: string, type: string, vmid: number, action: string) {
+    if (!clusterId) return;
+    await fetch(`/api/proxmox/clusters/${clusterId}/nodes/${node}/${type}/${vmid}/${action}`, { method: 'POST', credentials: 'include' });
+    fetch(`/api/proxmox/clusters/${clusterId}/vms`, { credentials: 'include' }).then((r) => r.json()).then((j) => setVms(j.data || []));
+  }
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div><h1 className="h1">VMs / VPS</h1><p className="lede">Proxmox virtual machines and containers.</p></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {clusterId && <NavLink to={`/admin/proxmox/${clusterId}/vms/new/vm`} className="btn btn-primary btn-sm"><FiPlus size={13} /> Create VM</NavLink>}
+          {clusterId && <NavLink to={`/admin/proxmox/${clusterId}/vms/new/lxc`} className="btn btn-ghost btn-sm"><FiPlus size={13} /> Create LXC</NavLink>}
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <select className="input" style={{ maxWidth: 240 }} value={clusterId ?? ''} onChange={(e) => setClusterId(parseInt(e.target.value, 10) || null)}>
+          {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      {loading ? <Skeleton lines={4} /> : vms.length === 0 ? (
+        <div className="muted">No VMs on this cluster.</div>
+      ) : (
+        <div className="table-wrap"><table className="table"><thead><tr><th>VMID</th><th>Name</th><th>Node</th><th>Type</th><th>Status</th><th>Owner</th><th></th></tr></thead><tbody>{vms.map((v) => <tr key={`${v.node}:${v.type}:${v.vmid}`}>
+          <td className="mono">{v.vmid}</td>
+          <td>{v.name}</td>
+          <td>{v.node}</td>
+          <td><span className="badge">{v.type === 'qemu' ? 'VM' : 'LXC'}</span></td>
+          <td><span className={`badge badge-${v.status}`}>{v.status}</span></td>
+          <td>{v.owner?.username ?? '—'}</td>
+          <td><div style={{ display: 'flex', gap: 4 }}>
+            {v.status === 'running' ? <>
+              <button className="btn btn-ghost btn-sm" onClick={() => vmAction(v.node, v.type, v.vmid, 'stop')}>Stop</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => vmAction(v.node, v.type, v.vmid, 'reboot')}>Reboot</button>
+            </> : <>
+              <button className="btn btn-ghost btn-sm" onClick={() => vmAction(v.node, v.type, v.vmid, 'start')}>Start</button>
+            </>}
+            <NavLink to={`/vps/${v.assignmentId}`} className="btn btn-ghost btn-sm">Manage</NavLink>
+          </div></td>
+        </tr>)}</tbody></table></div>
+      )}
+    </div>
+  );
+}
+
+function CreateVmPage() {
+  const { clusterId } = useParams() as { clusterId: string };
+  const cid = parseInt(clusterId || '0', 10);
+  const nav = useNavigate();
+  const toast = useToast();
+  const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
+  const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
+  const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
+  const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
+  const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; iso: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; storage: string | null }[]>([]);
+  const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number }[]>([]);
+  const [f, setF] = React.useState({ node: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ip: '', gateway: '', nameserver: '', iso: '', sshkeys: '', userId: '', templatePreset: '' });
+  const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => {
+    fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data));
+    fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data) && j.data[0]) { setNodes(j.data); setF((p) => ({ ...p, node: j.data[0].node })); } });
+    fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || []));
+    fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates((j.data || []).filter((t: { type: string }) => t.type === 'qemu')));
+  }, [cid]);
+  React.useEffect(() => { if (f.node) fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }); }, [cid, f.node]);
+  React.useEffect(() => { if (f.templatePreset) { const t = templates.find((t) => String(t.id) === f.templatePreset); if (t) setF((p) => ({ ...p, storage: t.storage || p.storage, iso: t.iso || p.iso, cores: t.defaultCores ? String(t.defaultCores) : p.cores, memory: t.defaultMemory ? String(t.defaultMemory) : p.memory, disk: t.defaultDisk ? String(t.defaultDisk) : p.disk })); } }, [f.templatePreset, templates]);
+  async function fetchRemote() { const r = await fetch(`/api/proxmox/clusters/${cid}/fetch-templates`, { credentials: 'include' }); const j = await r.json(); setRemoteTemplates(j.data || []); }
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setSaving(true);
+    const body: Record<string, unknown> = { node: f.node, type: 'qemu' };
+    if (f.hostname) body.hostname = f.hostname.trim();
+    if (f.cores) body.cores = parseInt(f.cores, 10);
+    if (f.sockets) body.sockets = parseInt(f.sockets, 10);
+    if (f.memory) body.memory = parseInt(f.memory, 10);
+    if (f.disk) body.disk = parseInt(f.disk, 10);
+    if (f.storage) body.storage = f.storage;
+    if (f.bridge) body.bridge = f.bridge;
+    if (f.vlan) body.vlan = parseInt(f.vlan, 10);
+    if (f.ip) body.ip = f.ip.trim();
+    if (f.gateway) body.gateway = f.gateway.trim();
+    if (f.nameserver) body.nameserver = f.nameserver.trim();
+    if (f.iso) body.iso = f.iso.trim();
+    if (f.templatePreset) body.templateId = parseInt(f.templatePreset, 10);
+    if (f.sshkeys) body.sshkeys = f.sshkeys;
+    if (f.userId) body.userId = parseInt(f.userId, 10);
+    const r = await fetch(`/api/proxmox/clusters/${cid}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    setSaving(false);
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || String(j.message || 'Create failed')); return; }
+    toast?.show('VM creation started'); nav('/admin/vms');
+  }
+  return (
+    <div className="page" style={{ maxWidth: 780 }}>
+      <div className="page-head"><div><h1 className="h1">Create QEMU VM · {cluster?.name || `#${cid}`}</h1><p className="lede">Virtual machine with full hardware emulation.</p></div><NavLink to="/admin/vms" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink></div>
+      <Card title="Identity">
+        <form id="vm-form" onSubmit={submit} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Hostname (FQDN)</span><input className="input mono" value={f.hostname} onChange={(e) => setF({ ...f, hostname: e.target.value })} placeholder="vm1.example.com" required /></label>
+            <label className="field"><span className="label">Node</span><select className="input" value={f.node} onChange={(e) => setF({ ...f, node: e.target.value })} required>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
+          </div>
+          <label className="field"><span className="label">Owner</span><select className="input" value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
+        </form>
+      </Card>
+      <Card title="Resources">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">vCPU cores</span><input className="input mono" value={f.cores} onChange={(e) => setF({ ...f, cores: e.target.value })} /></label>
+          <label className="field"><span className="label">Sockets</span><input className="input mono" value={f.sockets} onChange={(e) => setF({ ...f, sockets: e.target.value })} /></label>
+          <label className="field"><span className="label">RAM (MB)</span><input className="input mono" value={f.memory} onChange={(e) => setF({ ...f, memory: e.target.value })} /></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
+          <label className="field"><span className="label">Storage</span><select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select></label>
+        </div>
+      </Card>
+      <Card title="Network">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Bridge</span><input className="input mono" value={f.bridge} onChange={(e) => setF({ ...f, bridge: e.target.value })} /></label>
+          <label className="field"><span className="label">VLAN</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="optional" /></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">IP (CIDR or dhcp)</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="10.0.0.10/24" /></label>
+          <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
+        </div>
+        <label className="field"><span className="label">DNS</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
+      </Card>
+      <Card title="OS">
+        {templates.length > 0 && <label className="field"><span className="label">Template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none —</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+        <label className="field"><span className="label">ISO</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={fetchRemote}>Fetch from Proxmox storage</button>
+        {remoteTemplates.filter((t) => t.content === 'iso').length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 8 }}><table className="table"><thead><tr><th>File</th><th>Size</th><th></th></tr></thead><tbody>{remoteTemplates.filter((t) => t.content === 'iso').map((t) => <tr key={t.volid}><td className="mono" style={{ fontSize: 12 }}>{t.volid.split('/').pop()}</td><td>{(t.size / 1073741824).toFixed(1)} GB</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => setF((p) => ({ ...p, iso: t.volid }))}>Use</button></td></tr>)}</tbody></table></div>
+        )}
+        <label className="field" style={{ marginTop: 10 }}><span className="label">SSH keys</span><textarea className="input mono textarea" rows={2} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
+      </Card>
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <div><button className="btn btn-primary" form="vm-form" disabled={saving}>{saving ? 'Creating…' : 'Create VM'}</button></div>
+    </div>
+  );
+}
+
+function CreateLxcPage() {
+  const { clusterId } = useParams() as { clusterId: string };
+  const cid = parseInt(clusterId || '0', 10);
+  const nav = useNavigate();
+  const toast = useToast();
+  const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
+  const [nodes, setNodes] = React.useState<{ node: string }[]>([]);
+  const [storages, setStorages] = React.useState<{ storage: string; type: string }[]>([]);
+  const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
+  const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; ostemplate: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; storage: string | null }[]>([]);
+  const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number }[]>([]);
+  const [f, setF] = React.useState({ node: '', hostname: '', cores: '1', memory: '512', disk: '8', storage: '', bridge: 'vmbr0', vlan: '', ip: 'dhcp', gateway: '', nameserver: '1.1.1.1', ostemplate: '', sshkeys: '', userId: '', templatePreset: '' });
+  const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => {
+    fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data));
+    fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data) && j.data[0]) { setNodes(j.data); setF((p) => ({ ...p, node: j.data[0].node })); } });
+    fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || []));
+    fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates((j.data || []).filter((t: { type: string }) => t.type === 'lxc')));
+  }, [cid]);
+  React.useEffect(() => { if (f.node) fetch(`/api/proxmox/clusters/${cid}/storages?node=${encodeURIComponent(f.node)}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setStorages(j.data); if (!f.storage && j.data[0]) setF((p) => ({ ...p, storage: j.data[0].storage })); } }); }, [cid, f.node]);
+  React.useEffect(() => { if (f.templatePreset) { const t = templates.find((t) => String(t.id) === f.templatePreset); if (t) setF((p) => ({ ...p, storage: t.storage || p.storage, ostemplate: t.ostemplate || p.ostemplate, cores: t.defaultCores ? String(t.defaultCores) : p.cores, memory: t.defaultMemory ? String(t.defaultMemory) : p.memory, disk: t.defaultDisk ? String(t.defaultDisk) : p.disk })); } }, [f.templatePreset, templates]);
+  async function fetchRemote() { const r = await fetch(`/api/proxmox/clusters/${cid}/fetch-templates`, { credentials: 'include' }); const j = await r.json(); setRemoteTemplates(j.data || []); }
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); setSaving(true);
+    const body: Record<string, unknown> = { node: f.node, type: 'lxc' };
+    if (f.hostname) body.hostname = f.hostname.trim();
+    if (f.cores) body.cores = parseInt(f.cores, 10);
+    if (f.memory) body.memory = parseInt(f.memory, 10);
+    if (f.disk) body.disk = parseInt(f.disk, 10);
+    if (f.storage) body.storage = f.storage;
+    if (f.bridge) body.bridge = f.bridge;
+    if (f.vlan) body.vlan = parseInt(f.vlan, 10);
+    if (f.ip) body.ip = f.ip.trim();
+    if (f.gateway) body.gateway = f.gateway.trim();
+    if (f.nameserver) body.nameserver = f.nameserver.trim();
+    if (f.ostemplate) body.ostemplate = f.ostemplate.trim();
+    if (f.templatePreset) body.templateId = parseInt(f.templatePreset, 10);
+    if (f.sshkeys) body.sshkeys = f.sshkeys;
+    if (f.userId) body.userId = parseInt(f.userId, 10);
+    const r = await fetch(`/api/proxmox/clusters/${cid}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    setSaving(false);
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || String(j.message || 'Create failed')); return; }
+    toast?.show('LXC container creation started'); nav('/admin/vms');
+  }
+  return (
+    <div className="page" style={{ maxWidth: 780 }}>
+      <div className="page-head"><div><h1 className="h1">Create LXC Container · {cluster?.name || `#${cid}`}</h1><p className="lede">Lightweight Linux container.</p></div><NavLink to="/admin/vms" className="btn btn-ghost btn-sm"><FiChevronLeft size={13} /> Back</NavLink></div>
+      <Card title="Identity">
+        <form id="lxc-form" onSubmit={submit} className="form">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">Hostname</span><input className="input mono" value={f.hostname} onChange={(e) => setF({ ...f, hostname: e.target.value })} placeholder="ct1.example.com" required /></label>
+            <label className="field"><span className="label">Node</span><select className="input" value={f.node} onChange={(e) => setF({ ...f, node: e.target.value })} required>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
+          </div>
+          <label className="field"><span className="label">Owner</span><select className="input" value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
+        </form>
+      </Card>
+      <Card title="Resources">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">CPU cores</span><input className="input mono" value={f.cores} onChange={(e) => setF({ ...f, cores: e.target.value })} /></label>
+          <label className="field"><span className="label">RAM (MB)</span><input className="input mono" value={f.memory} onChange={(e) => setF({ ...f, memory: e.target.value })} /></label>
+          <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
+        </div>
+        <label className="field"><span className="label">Storage</span><select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select></label>
+      </Card>
+      <Card title="Network">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">Bridge</span><input className="input mono" value={f.bridge} onChange={(e) => setF({ ...f, bridge: e.target.value })} /></label>
+          <label className="field"><span className="label">VLAN</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="optional" /></label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <label className="field"><span className="label">IP (CIDR or dhcp)</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="10.0.0.10/24 or dhcp" /></label>
+          <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
+        </div>
+        <label className="field"><span className="label">DNS</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
+      </Card>
+      <Card title="OS template">
+        {templates.length > 0 && <label className="field"><span className="label">Template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none —</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+        <label className="field"><span className="label">LXC template</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" required /></label>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={fetchRemote}>Fetch from Proxmox storage</button>
+        {remoteTemplates.filter((t) => t.content === 'vztmpl').length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 8 }}><table className="table"><thead><tr><th>File</th><th>Size</th><th></th></tr></thead><tbody>{remoteTemplates.filter((t) => t.content === 'vztmpl').map((t) => <tr key={t.volid}><td className="mono" style={{ fontSize: 12 }}>{t.volid.split('/').pop()}</td><td>{(t.size / 1073741824).toFixed(1)} GB</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => setF((p) => ({ ...p, ostemplate: t.volid }))}>Use</button></td></tr>)}</tbody></table></div>
+        )}
+        <label className="field" style={{ marginTop: 10 }}><span className="label">SSH keys</span><textarea className="input mono textarea" rows={2} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
+      </Card>
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+      <div><button className="btn btn-primary" form="lxc-form" disabled={saving}>{saving ? 'Creating…' : 'Create LXC'}</button></div>
+    </div>
+  );
+}
+
+
 function NewVpsPage() {
   const { clusterId } = useParams() as { clusterId: string };
   const cid = parseInt(clusterId || '0', 10);
@@ -3272,7 +3515,10 @@ function AppInner() {
         <Route path="/admin/proxmox/templates" element={<RequireAuth adminOnly><TemplatesPage /></RequireAuth>} />
         <Route path="/admin/proxmox/templates/new" element={<RequireAuth adminOnly><TemplatesEditor /></RequireAuth>} />
         <Route path="/admin/proxmox/templates/:id" element={<RequireAuth adminOnly><TemplatesEditor /></RequireAuth>} />
-        <Route path="/admin/proxmox" element={<RequireAuth adminOnly><ProxmoxPage /></RequireAuth>} />
+        <Route path="/admin/vms" element={<RequireAuth adminOnly><AdminVmsPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/:clusterId/vms/new/vm" element={<RequireAuth adminOnly><CreateVmPage /></RequireAuth>} />
+        <Route path="/admin/proxmox/:clusterId/vms/new/lxc" element={<RequireAuth adminOnly><CreateLxcPage /></RequireAuth>} />
+                <Route path="/admin/proxmox" element={<RequireAuth adminOnly><ProxmoxPage /></RequireAuth>} />
         <Route path="/admin/proxmox/new" element={<RequireAuth adminOnly><NewProxmoxClusterPage /></RequireAuth>} />
         <Route path="/admin/proxmox/:clusterId/ips" element={<RequireAuth adminOnly><ProxmoxIpPoolPage /></RequireAuth>} />
         <Route path="/admin/proxmox/:id" element={<RequireAuth adminOnly><ClusterEditorPage /></RequireAuth>} />
@@ -3284,6 +3530,20 @@ function AppInner() {
     </Shell>
   );
 }
+
+createRoot(document.getElementById('root')!).render(
+  <QueryClientProvider client={qc}>
+    <BrowserRouter>
+      <AuthProvider>
+        <ToastProvider>
+          <ConfirmProvider>
+            <AppInner />
+          </ConfirmProvider>
+        </ToastProvider>
+      </AuthProvider>
+    </BrowserRouter>
+  </QueryClientProvider>,
+);
 
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={qc}>

@@ -526,21 +526,28 @@ export default function proxmoxRoutes(db: Db) {
     const storage = b.storage || (tmpl ? tmpl.storage : undefined) || (b.type === 'qemu' ? 'local-lvm' : 'local-lvm');
     const diskGB = b.disk ?? (tmpl ? (tmpl.defaultDisk || 20) : 20);
     const cores = b.cores ?? (tmpl ? (tmpl.defaultCores || 1) : undefined);
-    const sockets = b.sockets ?? undefined;
+    const sockets = b.type === 'qemu' ? (b.sockets ?? 1) : undefined;
     const memory = b.memory ?? (tmpl ? (tmpl.defaultMemory || 512) : 512);
     const balloon = b.balloon !== undefined ? b.balloon : undefined;
+
+    let vmid = b.vmid;
+    if (!vmid) {
+      try {
+        const existing = await listVms(cluster as never, key);
+        vmid = (existing.reduce((max, v) => Math.max(max, v.vmid), 99) || 99) + 1;
+      } catch { vmid = 200; }
+    }
+
     const params: Record<string, string | number> = {};
-    if (b.vmid) params.vmid = b.vmid;
-    if (hostname) params.name = hostname;
-    else if (b.name) params.name = b.name;
+    params.vmid = vmid!;
     if (cores) params.cores = cores;
-    if (sockets) params.sockets = sockets;
+    if (b.type === 'qemu' && sockets) params.sockets = sockets;
     if (memory) params.memory = memory;
     if (balloon !== undefined) params.balloon = balloon;
-    if (hostname) params.hostname = hostname;
     const iso = b.iso || (tmpl ? tmpl.iso : undefined);
     const ostemplate = b.ostemplate || (tmpl ? tmpl.ostemplate : undefined);
     if (b.type === 'qemu') {
+      if (hostname) params.name = hostname;
       params['scsi0'] = `${storage}:${diskGB}`;
       let net0 = `virtio,bridge=${bridge}`;
       if (ip && ip !== 'dhcp') net0 += `,ip=${ip}`;
@@ -554,7 +561,7 @@ export default function proxmoxRoutes(db: Db) {
       if (b.sshkeys) params.sshkeys = encodeURIComponent(b.sshkeys);
       params.agent = 'enabled=1';
     } else {
-      params.hostname = hostname || b.name || `ct${b.vmid || ''}`;
+      params.hostname = hostname || b.name || `ct${vmid}`;
       params.cores = cores || 1;
       params.memory = memory || 512;
       params.rootfs = `${storage}:${diskGB}`;
@@ -571,17 +578,17 @@ export default function proxmoxRoutes(db: Db) {
     }
     try {
       const res = b.type === 'qemu' ? await createQemu(cluster as never, key, b.node, params) : await createLxc(cluster as never, key, b.node, params);
-      const vmid = b.vmid || parseInt(String((res as { data?: string }).data || '').replace(/\D/g, '') || '0', 10) || 0;
+      const createdVmid = vmid!;
       let createdAssignmentId;
-      if (b.userId && vmid) {
-        const [assign] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid, userId: b.userId }).returning();
+      if (b.userId && createdVmid) {
+        const [assign] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid: createdVmid, userId: b.userId }).returning();
         createdAssignmentId = assign?.id;
       }
       if (pool && createdAssignmentId) {
         try { await db.update(schema.proxmoxIps).set({ assignmentId: createdAssignmentId }).where(eq(schema.proxmoxIps.id, b.ipPoolId!)); } catch {}
       }
       const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
-      await audit(db, admin.id, 'proxmox.created', 'proxmox_vm', `${id}/${b.node}/${vmid}`, auditIp(c), { node: b.node, type: b.type, vmid, hostname });
+      await audit(db, admin.id, 'proxmox.created', 'proxmox_vm', `${id}/${b.node}/${createdVmid}`, auditIp(c), { node: b.node, type: b.type, vmid: createdVmid, hostname });
       return c.json({ data: res }, 201);
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
