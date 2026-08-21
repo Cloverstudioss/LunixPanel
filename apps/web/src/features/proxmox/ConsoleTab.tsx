@@ -7,24 +7,24 @@ type ConsoleProps = {
   vmType: 'qemu' | 'lxc';
 };
 
-// Embedded console: noVNC canvas for QEMU VMs, raw 5150-stream terminal for LXC.
-// Both tunnel through the panel API websocket proxy (/api/proxmox/.../console/ws).
+// Embedded noVNC console for BOTH qemu and lxc — PVE's vncproxy speaks RFB for
+// containers too. Everything tunnels through the panel API websocket proxy.
 export default function ConsoleTab({ vps, vmType }: ConsoleProps) {
+  void vmType;
   const [status, setStatus] = React.useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [errMsg, setErrMsg] = React.useState('');
-  const wsRef = React.useRef<WebSocket | null>(null);
   const mountRef = React.useRef<HTMLDivElement>(null);
-  const rfbRef = React.useRef<{ disconnect: () => void } | null>(null);
-  const termRef = React.useRef<{ dispose: () => void; writeln: (s: string) => void; onData: (cb: (d: string) => void) => void } | null>(null);
-  const base = vpsApiBase(vps);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rfbRef = useRefAny(null);
+
+  function useRefAny(initial: null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return React.useRef<any>(initial);
+  }
 
   const disconnect = React.useCallback(() => {
     try { rfbRef.current?.disconnect(); } catch { /* ignore */ }
     rfbRef.current = null;
-    try { termRef.current?.dispose(); } catch { /* ignore */ }
-    termRef.current = null;
-    try { wsRef.current?.close(); } catch { /* ignore */ }
-    wsRef.current = null;
     setStatus('idle');
   }, []);
 
@@ -34,101 +34,68 @@ export default function ConsoleTab({ vps, vmType }: ConsoleProps) {
     disconnect();
     setStatus('connecting');
     setErrMsg('');
-    // Build the WS URL against the panel origin (vite dev proxy forwards /api).
+    // Clear whatever a previous session rendered.
+    if (mountRef.current) mountRef.current.innerHTML = '';
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsPath = vps.assignmentId
       ? `/api/proxmox/vms/${vps.assignmentId}/console/ws`
       : `/api/proxmox/vms/raw/${vps.clusterId}/${encodeURIComponent(vps.node || '')}/${vps.type}/${vps.vmid}/console/ws`;
     const url = `${proto}//${window.location.host}${wsPath}`;
 
-    if (vmType === 'qemu') {
-      try {
-        // @ts-expect-error — noVNC ships no type declarations; its exports map only exposes core/rfb.js
-        const { default: RFB } = await import('@novnc/novnc');
-        const ws = new WebSocket(url, ['binary']);
-        ws.binaryType = 'arraybuffer';
-        wsRef.current = ws;
-        ws.onopen = () => setStatus('connected');
-        ws.onerror = () => { setStatus('error'); setErrMsg('Console connection failed — check that the VM is running.'); };
-        ws.onclose = (e) => { if (status !== 'error') { setStatus('error'); setErrMsg(`Console closed (${e.code || ''})`); } };
-        const rfb = new RFB(mountRef.current!, ws as unknown as WebSocket, { shared: false });
-        rfb.scaleViewport = true;
-        rfb.resizeSession = false;
-        rfb.addEventListener('disconnect', () => setStatus('idle'));
-        rfb.addEventListener('connect', () => setStatus('connected'));
-        rfbRef.current = rfb;
-      } catch (e) {
+    try {
+      // @ts-expect-error — noVNC ships no type declarations
+      const { default: RFB } = await import('@novnc/novnc');
+      const ws = new WebSocket(url, ['binary']);
+      ws.binaryType = 'arraybuffer';
+
+      const rfb = new RFB(mountRef.current!, ws, { shared: false });
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.background = '#0b0b0d';
+      rfb.addEventListener('connect', () => {
+        setStatus('connected');
+        // Grab keyboard input so typing works immediately.
+        try { rfb.focus(); } catch { /* ignore */ }
+      });
+      rfb.addEventListener('disconnect', (ev: Event) => {
+        const clean = (ev as CustomEvent).detail?.clean ?? true;
+        if (clean) setStatus('idle');
+        else { setStatus('error'); setErrMsg('Console disconnected unexpectedly.'); }
+      });
+      rfb.addEventListener('securityfailure', (ev: Event) => {
+        const reason = (ev as CustomEvent).detail?.reason || 'authentication failed';
         setStatus('error');
-        setErrMsg(`Failed to load noVNC: ${String((e as Error).message)}`);
-      }
-    } else {
-      // LXC: PVE's lxcwebsocket speaks a simple newline-framed stream over the same vncwebsocket channel.
-      try {
-        // xterm v6 exports Terminal as a named export.
-        const { Terminal } = await import('@xterm/xterm');
-        // @ts-expect-error — CSS side-effect import
-        await import('@xterm/xterm/css/xterm.css');
-        const term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: '"Geist Mono",ui-monospace,Menlo,monospace', theme: { background: '#0b0b0d' } });
-        term.open(mountRef.current!);
-        termRef.current = term as unknown as typeof termRef.current;
-        term.onData((data: string) => {
-          const enc = new TextEncoder().encode(data);
-          wsRef.current?.send(enc.buffer as ArrayBuffer);
-        });
-        const ws = new WebSocket(url, ['binary']);
-        ws.binaryType = 'arraybuffer';
-        wsRef.current = ws;
-        const dec = new TextDecoder();
-        ws.onmessage = (ev) => {
-          const text = dec.decode(ev.data as ArrayBuffer);
-          for (const line of text.split('\n')) {
-            if (!line.trim()) continue;
-            try {
-              const msg = JSON.parse(line);
-              if (typeof msg.data === 'string') term.write(msg.data);
-              else if (msg.error) term.write(`\r\n! ${msg.error}\r\n`);
-            } catch {
-              term.write(text);
-            }
-          }
-        };
-        ws.onopen = () => { setStatus('connected'); term.writeln('Connected to container console.\r'); };
-        ws.onerror = () => { setStatus('error'); setErrMsg('Console connection failed — check that the container is running.'); };
-        ws.onclose = (e) => { term.write(`\r\n[disconnected ${e.code || ''}]\r\n`); setStatus('idle'); };
-      } catch (e) {
-        setStatus('error');
-        setErrMsg(`Failed to load xterm: ${String((e as Error).message)}`);
-      }
+        setErrMsg(`Console rejected: ${reason}`);
+      });
+      rfbRef.current = rfb;
+    } catch (e) {
+      setStatus('error');
+      setErrMsg(`Failed to load noVNC: ${String((e as Error).message)}`);
     }
   }
 
   return (
     <div className="stack">
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="btn btn-primary btn-sm" onClick={connect} disabled={status === 'connecting' || status === 'connected'}>
-          <FiTerminal size={13} /> {status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting…' : 'Connect'}
+        <button className="btn btn-primary btn-sm" onClick={connect} disabled={status === 'connecting'}>
+          <FiTerminal size={13} /> {status === 'connected' ? 'Reconnect' : status === 'connecting' ? 'Connecting…' : 'Connect'}
         </button>
         {(status === 'connected' || status === 'connecting') && (
           <button className="btn btn-ghost btn-sm" onClick={disconnect}><FiX size={13} /> Disconnect</button>
         )}
         <span className={`badge badge-${status === 'connected' ? 'active' : status === 'error' ? 'suspended' : ''}`}>{status}</span>
-        <span className="muted" style={{ fontSize: 11 }}>{vmType === 'qemu' ? 'noVNC (graphical)' : 'serial/terminal'} · proxied through panel</span>
+        <span className="muted" style={{ fontSize: 11 }}>noVNC · proxied through panel</span>
       </div>
       {errMsg && <div className="alert alert-error">{errMsg}</div>}
       <div
         ref={mountRef}
+        onClick={() => { try { rfbRef.current?.focus(); } catch { /* ignore */ } }}
         style={{
           height: 520, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--line)',
-          background: '#0b0b0d', position: 'relative',
-          display: status === 'connected' ? 'block' : 'grid', placeItems: 'center',
+          background: '#0b0b0d',
         }}
-      >
-        {status !== 'connected' && (
-          <div className="muted" style={{ fontSize: 13 }}>
-            {status === 'connecting' ? 'Opening console…' : 'Click Connect to open the embedded console.'}
-          </div>
-        )}
-      </div>
+      />
+      {status === 'idle' && <div className="muted" style={{ fontSize: 12 }}>Click Connect, then click inside the screen to capture your keyboard.</div>}
     </div>
   );
 }
