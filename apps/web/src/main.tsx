@@ -2760,7 +2760,7 @@ function NewVpsPage() {
   const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number; format?: string }[]>([]);
   const [remoteIps, setRemoteIps] = React.useState<{ node: string; iface: string; address: string; netmask: string; gateway?: string; bridge: string }[]>([]);
   const [fetching, setFetching] = React.useState<'templates' | 'ips' | null>(null);
-  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'custom' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: 'dhcp', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
+  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'dhcp' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: '', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
   const [adv, setAdv] = React.useState(false);
   const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
   React.useEffect(() => { fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data)).catch(() => {}); fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setNodes(j.data); if (j.data[0]?.node) setF((p) => ({ ...p, node: j.data[0].node })); } }).catch(() => {}); fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])).catch(() => {}); fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates(j.data || [])).catch(() => {}); }, [cid]);
@@ -2866,23 +2866,21 @@ function NewVpsPage() {
           <label className="field"><span className="label">Bridge</span><input className="input mono" value={f.bridge} onChange={(e) => setF({ ...f, bridge: e.target.value })} placeholder="vmbr0" /></label>
           <label className="field"><span className="label">VLAN (optional)</span><input className="input mono" value={f.vlan} onChange={(e) => setF({ ...f, vlan: e.target.value })} placeholder="100" /></label>
         </div>
-        {f.node && ipPools.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-            <label className="field"><span className="label">IP address</span><select className="input" value={f.ipMode} onChange={(e) => setF({ ...f, ipMode: e.target.value as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: 'dhcp', gateway: '' })}>
-              <option value="dhcp">DHCP (no IP from pool)</option>
-              <option value="pool">From IP pool</option>
-              <option value="custom">Custom CIDR</option>
-            </select></label>
-            {f.ipMode === 'pool' && (
-              <label className="field"><span className="label">Pool entry</span><select className="input mono" value={f.ipPool} onChange={(e) => { const p = ipPools.find((i) => String(i.id) === e.target.value); setF({ ...f, ipPool: e.target.value, ip: p?.address || '', bridge: p?.bridge || f.bridge, gateway: p?.gateway || '', vlan: p?.vlan ? String(p.vlan) : '' }); }}><option value="">Choose…</option>{ipPools.map((p) => <option key={p.id} value={p.id}>{p.address} ({p.bridge})</option>)}</select></label>
-            )}
-          </div>
-        )}
-        {(!f.node || ipPools.length === 0) && (
-          <label className="field"><span className="label">IP mode</span><select className="input" value={f.ipMode} onChange={(e) => setF({ ...f, ipMode: e.target.value as 'dhcp' | 'pool' | 'custom', ip: 'dhcp' })}><option value="dhcp">DHCP</option><option value="custom">Custom CIDR</option><option value="pool" disabled={ipPools.length === 0}>Pool (none free for this node)</option></select></label>
-        )}
-        {f.ipMode === 'custom' && (
-          <label className="field"><span className="label">IP address</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="dhcp or 10.0.0.10/24" /></label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <label className="field"><span className="label">IP mode</span><select className="input" value={f.ipMode} onChange={(e) => setF({ ...f, ipMode: e.target.value as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: e.target.value === 'dhcp' ? '' : f.ip, gateway: e.target.value === 'dhcp' ? '' : f.gateway })}>
+            <option value="dhcp">DHCP (no static IP)</option>
+            {ipPools.length > 0 && <option value="pool">From IP pool ({ipPools.length} free)</option>}
+            <option value="custom">Custom CIDR</option>
+          </select></label>
+          {f.ipMode === 'pool' && (
+            <label className="field"><span className="label">Pool entry</span><select className="input mono" value={f.ipPool} onChange={(e) => { const p = ipPools.find((i) => String(i.id) === e.target.value); setF({ ...f, ipPool: e.target.value, ip: p?.address || '', bridge: p?.bridge || f.bridge, gateway: p?.gateway || '', vlan: p?.vlan ? String(p.vlan) : '' }); }}><option value="">Choose IP…</option>{ipPools.map((p) => <option key={p.id} value={p.id}>{p.address} ({p.bridge})</option>)}</select></label>
+          )}
+          {f.ipMode === 'custom' && (
+            <label className="field"><span className="label">IP address (CIDR)</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="10.0.0.10/24" /></label>
+          )}
+        </div>
+        {f.ipMode === 'pool' && ipPools.length === 0 && (
+          <div className="alert" style={{ marginBottom: 10 }}>No free IPs in pool for this node. Add IPs in the IP Pool tab or use Custom CIDR.</div>
         )}
         <div style={{ marginBottom: 10 }}>
           <button type="button" className="btn btn-ghost btn-sm" disabled={!f.node || fetching === 'ips'} onClick={fetchRemoteIps}>
@@ -2901,8 +2899,9 @@ function NewVpsPage() {
         </div>
       </Card>
       <Card title="OS / template">
+        <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc', templatePreset: '' })} style={{ maxWidth: 200, marginBottom: 10 }}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC (Container)</option></select></label>
         {templates.length > 0 && (
-          <label className="field"><span className="label">Template preset (optional)</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none, choose manually —</option>{templates.filter((t) => t.type === f.type || f.type === 'qemu' && t.type === 'qemu' || f.type === 'lxc' && t.type === 'lxc').map((t) => <option key={t.id} value={t.id}>{t.name} ({t.type === 'qemu' ? 'QEMU' : 'LXC'})</option>)}</select></label>
+          <label className="field"><span className="label">Saved template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none —</option>{templates.filter((t) => t.type === f.type).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.type === 'qemu' ? 'QEMU' : 'LXC'})</option>)}</select></label>
         )}
         <div style={{ marginBottom: 10 }}>
           <span className="label" style={{ marginBottom: 6, display: 'block' }}>Quick presets</span>
@@ -2918,17 +2917,23 @@ function NewVpsPage() {
             ].map((p) => <button key={p.label} type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setF((prev) => ({ ...prev, type: p.type, cores: p.cores, memory: p.memory, disk: p.disk, templatePreset: '' }))}>{p.label}</button>)}
           </div>
         </div>
-        <label className="field"><span className="label">OS image source</span><select className="input" value={f.type === 'qemu' ? 'iso' : 'ostemplate'} onChange={(e) => setF({ ...f, type: e.target.value === 'iso' ? 'qemu' : 'lxc', iso: '', ostemplate: '', templatePreset: '' })} style={{ maxWidth: 240, marginBottom: 10 }}><option value="iso">QEMU (ISO install)</option><option value="ostemplate">LXC (template)</option></select></label>
-        {f.type === 'qemu' ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label> : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>}
+        {f.type === 'qemu' ? (
+          <label className="field"><span className="label">ISO path (storage:iso/file.iso)</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
+        ) : (
+          <label className="field"><span className="label">OS template path (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>
+        )}
         <div style={{ marginBottom: 10 }}>
           <button type="button" className="btn btn-ghost btn-sm" disabled={fetching === 'templates'} onClick={fetchRemoteTemplates}>
             {fetching === 'templates' ? 'Scanning…' : 'Fetch from Proxmox storage'}
           </button>
           {remoteTemplates.length > 0 && (
             <div className="table-wrap" style={{ marginTop: 8 }}>
-              <table className="table"><thead><tr><th>Name</th><th>Node</th><th>Size</th><th></th></tr></thead>
-              <tbody>{remoteTemplates.map((t) => <tr key={t.volid}><td className="mono" style={{ fontSize: 12 }}>{t.volid.split('/').pop()}</td><td>{t.node}</td><td>{(t.size / 1073741824).toFixed(1)} GB</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => importRemoteTemplate(t.volid, t.content)}>Use</button></td></tr>)}</tbody></table>
+              <table className="table"><thead><tr><th>File</th><th>Node</th><th>Size</th><th></th></tr></thead>
+              <tbody>{remoteTemplates.filter((t) => f.type === 'qemu' ? t.content === 'iso' : t.content === 'vztmpl').map((t) => <tr key={t.volid}><td className="mono" style={{ fontSize: 12 }}>{t.volid.split('/').pop()}</td><td>{t.node}</td><td>{(t.size / 1073741824).toFixed(1)} GB</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => importRemoteTemplate(t.volid, t.content)}>Use</button></td></tr>)}</tbody></table>
             </div>
+          )}
+          {remoteTemplates.length > 0 && remoteTemplates.filter((t) => f.type === 'qemu' ? t.content === 'iso' : t.content === 'vztmpl').length === 0 && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>No {f.type === 'qemu' ? 'ISOs' : 'LXC templates'} found on this cluster.</div>
           )}
         </div>
         <label className="field"><span className="label">SSH keys (optional)</span><textarea className="input mono textarea" rows={3} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
