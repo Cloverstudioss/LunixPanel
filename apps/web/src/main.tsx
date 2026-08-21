@@ -467,7 +467,7 @@ function ServerCard({ s }: { s: { id: number; name: string; status: string; memo
   );
 }
 
-function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterId?: number; clusterName: string; assignmentId?: number } }) {
+function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; type?: string; clusterId?: number; clusterName: string; assignmentId?: number } }) {
   const body = (
     <div className="server-card" style={{ cursor: 'pointer' }}>
       <div className="server-card-banner">
@@ -476,7 +476,7 @@ function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus:
       </div>
       <div className="server-card-body">
         <div className="server-card-title">{v.name}</div>
-        <div className="server-card-img mono muted">{v.clusterName} · {v.node} · VM {v.vmid}</div>
+        <div className="server-card-img mono muted">{v.clusterName} · {v.node} · {v.type === 'lxc' ? 'LXC' : 'VM'} {v.vmid}</div>
         <div className="server-card-stats">
           <div className="stat"><FiCpu size={12} /><span>{v.cpus} vCPU</span></div>
           <div className="stat"><FiHardDrive size={12} /><span>{Math.round(v.maxmem / 1048576)} MB</span></div>
@@ -485,7 +485,7 @@ function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus:
       </div>
     </div>
   );
-  const href = v.assignmentId ? `/vps/${v.assignmentId}` : (v.clusterId ? `/admin/vps/${v.clusterId}/${v.node}/qemu/${v.vmid}` : '#');
+  const href = v.assignmentId ? `/vps/${v.assignmentId}` : (v.clusterId ? `/vps/raw/${v.clusterId}/${v.node}/${v.type || 'qemu'}/${v.vmid}` : '#');
   return <NavLink to={href} style={{ textDecoration: 'none', color: 'inherit' }}>{body}</NavLink>;
 }
 
@@ -609,7 +609,7 @@ function VpsManage() {
 function UserOverview() {
   const { me } = useMe();
   const [servers, setServers] = React.useState<{ id: number; name: string; status: string; memory: number; disk: number; image?: string; banner?: string | null; userId?: number; egg?: { banner?: string | null; name?: string } | null }[]>([]);
-  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterId?: number; clusterName: string; assignmentId?: number; ownerId?: number }[]>([]);
+  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; type: string; clusterId?: number; clusterName: string; assignmentId?: number; ownerId?: number }[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [scope, setScope] = React.useState<'mine' | 'others'>('mine');
   React.useEffect(() => {
@@ -2887,7 +2887,7 @@ function AdminVmsPage() {
             </> : <>
               <button className="btn btn-ghost btn-sm" onClick={() => vmAction(v.node, v.type, v.vmid, 'start')}>Start</button>
             </>}
-            <NavLink to={`/admin/vps/${clusterId}/${v.node}/${v.type}/${v.vmid}`} className="btn btn-ghost btn-sm">Manage</NavLink>
+            <NavLink to={`/vps/raw/${clusterId}/${v.node}/${v.type}/${v.vmid}`} className="btn btn-ghost btn-sm">Manage</NavLink>
           </div></td>
         </tr>)}</tbody></table></div>
       )}
@@ -3569,7 +3569,7 @@ function AppInner() {
         <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
         <Route path="/server/:id" element={<RequireAuth><ServerManage /></RequireAuth>} />
         <Route path="/vps/:id" element={<RequireAuth><VpsManage /></RequireAuth>} />
-        <Route path="/admin/vps/:clusterId/:node/:type/:vmid" element={<RequireAuth adminOnly><VpsManage /></RequireAuth>} />
+        <Route path="/vps/raw/:clusterId/:node/:type/:vmid" element={<RequireAuth><VpsManage /></RequireAuth>} />
         <Route path="/account" element={<Navigate to="/settings" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />

@@ -613,14 +613,16 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
   });
-  app.get('/vms/raw/:clusterId/:node/:type/:vmid', requireAdmin, async (c) => {
+  app.get('/vms/raw/:clusterId/:node/:type/:vmid', requireAuth, async (c) => {
     const clusterId = parseInt(c.req.param('clusterId') || '0', 10);
     const node = c.req.param('node') || '';
     const type = (c.req.param('type') || 'qemu') as 'qemu' | 'lxc';
     const vmid = parseInt(c.req.param('vmid') || '0', 10);
+    const u = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
     const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, clusterId), eq(schema.proxmoxVmAssignments.node, node), eq(schema.proxmoxVmAssignments.type, type), eq(schema.proxmoxVmAssignments.vmid, vmid))).limit(1);
+    if (existing && !u.isAdmin && existing.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
     const a = existing || { id: 0, clusterId, node, type, vmid, hostname: null, userId: null };
     const key = process.env.ENCRYPTION_KEY!;
     try {
@@ -666,14 +668,19 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
   });
-  app.post('/vms/raw/:clusterId/:node/:type/:vmid/power', requireAdmin, zJson(z.object({ action: z.enum(['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume']) })), async (c) => {
+  app.post('/vms/raw/:clusterId/:node/:type/:vmid/power', requireAuth, zJson(z.object({ action: z.enum(['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume']) })), async (c) => {
     const clusterId = parseInt(c.req.param('clusterId') || '0', 10);
     const node = c.req.param('node') || '';
     const type = (c.req.param('type') || 'qemu') as 'qemu' | 'lxc';
     const vmid = parseInt(c.req.param('vmid') || '0', 10);
     const b = c.req.valid('json' as never) as { action: string };
+    const u = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    if (!u.isAdmin) {
+      const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, clusterId), eq(schema.proxmoxVmAssignments.node, node), eq(schema.proxmoxVmAssignments.type, type), eq(schema.proxmoxVmAssignments.vmid, vmid))).limit(1);
+      if (!existing || existing.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
+    }
     const key = process.env.ENCRYPTION_KEY!;
     try {
       const res = await vmAction(cluster as never, key, node, type, vmid, b.action);
@@ -684,13 +691,18 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
   });
-  app.post('/vms/raw/:clusterId/:node/:type/:vmid/vncproxy', requireAdmin, async (c) => {
+  app.post('/vms/raw/:clusterId/:node/:type/:vmid/vncproxy', requireAuth, async (c) => {
     const clusterId = parseInt(c.req.param('clusterId') || '0', 10);
     const node = c.req.param('node') || '';
     const type = (c.req.param('type') || 'qemu') as 'qemu' | 'lxc';
     const vmid = parseInt(c.req.param('vmid') || '0', 10);
+    const u = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    if (!u.isAdmin) {
+      const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, clusterId), eq(schema.proxmoxVmAssignments.node, node), eq(schema.proxmoxVmAssignments.type, type), eq(schema.proxmoxVmAssignments.vmid, vmid))).limit(1);
+      if (!existing || existing.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
+    }
     const key = process.env.ENCRYPTION_KEY!;
     try {
       const data = await vncProxy(cluster as never, key, node, type, vmid);
