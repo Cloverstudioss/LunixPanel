@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validator } from 'hono/validator';
-import { eq } from 'drizzle-orm';
+import { eq, ne } from 'drizzle-orm';
 import * as argon2 from 'argon2';
 import * as schema from '../../db/schema.js';
 import type { Db } from '../../db/index.js';
@@ -77,6 +77,18 @@ export default function userRoutes(db: Db) {
     if (!u) return c.json({ errors: [{ code: 'not_found', detail: 'User not found' }] }, 404);
     await db.update(schema.servers).set({ status: 'active' }).where(eq(schema.servers.userId, id));
     await db.insert(schema.auditLogs).values({ userId: me.id, action: 'user.unsuspended', targetType: 'user', targetId: String(id) });
+    return c.json({ data: { ok: true } });
+  });
+  app.delete('/:id', async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    if (me.id === id) return c.json({ errors: [{ code: 'forbidden', detail: 'Cannot delete yourself' }] }, 403);
+    const rows = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'User not found' }] }, 404);
+    const serverCount = await db.select().from(schema.servers).where(eq(schema.servers.userId, id));
+    if (serverCount.length > 0) return c.json({ errors: [{ code: 'has_servers', detail: `User owns ${serverCount.length} server(s). Delete or reassign them first.` }] }, 409);
+    await db.delete(schema.users).where(eq(schema.users.id, id));
+    await db.insert(schema.auditLogs).values({ userId: me.id, action: 'user.deleted', targetType: 'user', targetId: String(id), meta: { email: rows[0].email } });
     return c.json({ data: { ok: true } });
   });
   return app;

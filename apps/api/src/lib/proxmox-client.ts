@@ -100,3 +100,9 @@ export async function listVms(cluster: ProxmoxCluster, encryptionKey: string) {
   }
   return out;
 }
+
+export async function listNetworkInterfaces(cluster: ProxmoxCluster, encryptionKey: string, node: string) {
+  const r = await pveFetch(cluster, encryptionKey, `/nodes/${node}/network`);
+  if (!r.ok) throw new Error(`listNetworkInterfaces failed: ${r.status}`);
+  return (await r.json() as { data: { iface: string; type: string; address?: string; netmask?: string; gateway?: string; vmbridge?: string; vlan?: string; active: boolean }[] }).data;
+}

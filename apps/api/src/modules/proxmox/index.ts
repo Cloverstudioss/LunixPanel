@@ -7,7 +7,7 @@ import type { Db } from '../../db/index.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { encrypt } from '../../lib/crypto.js';
-import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent } from '../../lib/proxmox-client.js';
+import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces } from '../../lib/proxmox-client.js';
 import { audit, auditIp } from '../../lib/audit.js';
 
 function zJson<T extends z.ZodTypeAny>(s: T) {
@@ -67,7 +67,14 @@ export default function proxmoxRoutes(db: Db) {
     const key = process.env.ENCRYPTION_KEY!;
     let health: { status: string; version?: string | null; detail?: string } = { status: 'unknown' };
     try {
-      const r = await fetch(`${cluster.host.replace(/\/$/, '')}/api2/json/version`, { headers: { Authorization: `PVEAPIToken=${cluster.apiTokenId}=${(await import('../../lib/crypto.js')).decrypt(cluster.apiTokenSecretEncrypted, key)}` } } as RequestInit);
+      const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      if (!cluster.verifyTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      let r: Response;
+      try {
+        r = await fetch(`${cluster.host.replace(/\/$/, '')}/api2/json/version`, { headers: { Authorization: `PVEAPIToken=${cluster.apiTokenId}=${(await import('../../lib/crypto.js')).decrypt(cluster.apiTokenSecretEncrypted, key)}` } } as RequestInit);
+      } finally {
+        if (!cluster.verifyTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
+      }
       health = r.ok ? { status: 'online', version: ((await r.json().catch(() => ({}))) as { data?: { version?: string } }).data?.version || null } : { status: 'error', detail: `HTTP ${r.status}` };
     } catch (e) { health = { status: 'error', detail: String((e as Error).message) }; }
     const assignments = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.clusterId, id));
@@ -140,6 +147,60 @@ export default function proxmoxRoutes(db: Db) {
     try {
       const data = await listStorageContent(cluster as never, key, node, storage, content);
       return c.json({ data });
+    } catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
+  });
+  app.get('/clusters/:id/fetch-templates', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
+    const cluster = rows[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const key = process.env.ENCRYPTION_KEY!;
+    try {
+      const nodes = await listNodes(cluster as never, key) as { node: string }[];
+      const results: { node: string; storage: string; volid: string; content: string; size: number; format?: string }[] = [];
+      for (const n of nodes) {
+        const storages = await listStorages(cluster as never, key, n.node);
+        for (const s of storages) {
+          if (!s.content.includes('iso') && !s.content.includes('vztmpl')) continue;
+          const contentTypes = s.content.includes('iso') && s.content.includes('vztmpl') ? 'iso,vztmpl' : s.content.includes('iso') ? 'iso' : 'vztmpl';
+          try {
+            const items = await listStorageContent(cluster as never, key, n.node, s.storage, contentTypes);
+            for (const item of items) {
+              if (item.content === 'iso' || item.content === 'vztmpl') {
+                const ext = item.volid.split('.').pop()?.toLowerCase() || '';
+                results.push({ node: n.node, storage: s.storage, volid: item.volid, content: item.content, size: item.size, format: ext });
+              }
+            }
+          } catch {}
+        }
+      }
+      return c.json({ data: results });
+    } catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
+  });
+  app.get('/clusters/:id/fetch-ips', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
+    const cluster = rows[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const key = process.env.ENCRYPTION_KEY!;
+    try {
+      const nodes = await listNodes(cluster as never, key) as { node: string }[];
+      const existingIps = await db.select({ address: schema.proxmoxIps.address }).from(schema.proxmoxIps).where(eq(schema.proxmoxIps.clusterId, id));
+      const existingSet = new Set(existingIps.map((i) => i.address));
+      const results: { node: string; iface: string; address: string; netmask: string; gateway?: string; bridge: string }[] = [];
+      for (const n of nodes) {
+        try {
+          const ifaces = await listNetworkInterfaces(cluster as never, key, n.node);
+          for (const iface of ifaces) {
+            if (!iface.address || iface.type !== 'eth' || iface.iface === 'lo') continue;
+            const addr = iface.netmask ? `${iface.address}/${iface.netmask.replace(/^\//, '')}` : iface.address;
+            if (!existingSet.has(addr)) {
+              results.push({ node: n.node, iface: iface.iface, address: addr, netmask: iface.netmask || '', gateway: iface.gateway, bridge: 'vmbr0' });
+            }
+          }
+        } catch {}
+      }
+      return c.json({ data: results });
     } catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
   });
   app.get('/clusters/:id/vms', requireAdmin, async (c) => {

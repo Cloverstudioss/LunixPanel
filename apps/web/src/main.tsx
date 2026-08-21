@@ -1378,11 +1378,18 @@ function UsersAdmin() {
     const path = s === 'suspended' ? 'unsuspend' : 'suspend';
     await fetch(`/api/users/${id}/${path}`, { method: 'POST', credentials: 'include' }); load();
   }
+  async function del(id: number, email: string) {
+    if (!window.confirm(`Delete user ${email}? This cannot be undone.`)) return;
+    const res = await fetch(`/api/users/${id}`, { method: 'DELETE', credentials: 'include' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
+    setMsg('User deleted'); load();
+  }
   return (
     <div className="page">
       <div className="page-head"><div><h1 className="h1">Users</h1></div><button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>New user</button></div>
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
-      <div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={4} className="muted">No users.</td></tr> : rows.map((u) => <tr key={u.id}><td>{u.username} {u.isAdmin && <span className="badge badge-admin">admin</span>}</td><td className="mono" style={{ fontSize: 12 }}>{u.email}</td><td><span className={`badge badge-${u.status}`}>{u.status}</span></td><td><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-ghost btn-sm" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, is_admin: u.isAdmin, status: u.status })}>Edit</button><button className="btn btn-ghost btn-sm" onClick={() => suspend(u.id, u.status)}>{u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</button></div></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={4} className="muted">No users.</td></tr> : rows.map((u) => <tr key={u.id}><td>{u.username} {u.isAdmin && <span className="badge badge-admin">admin</span>}</td><td className="mono" style={{ fontSize: 12 }}>{u.email}</td><td><span className={`badge badge-${u.status}`}>{u.status}</span></td><td><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-ghost btn-sm" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, is_admin: u.isAdmin, status: u.status })}>Edit</button><button className="btn btn-ghost btn-sm" onClick={() => suspend(u.id, u.status)}>{u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</button><button className="btn btn-ghost btn-sm" style={{ color: '#ef4444' }} onClick={() => del(u.id, u.email)}>Delete</button></div></td></tr>)}</tbody></table></div>
       <Modal open={open} onClose={() => setOpen(false)} title="New user" footer={<><button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button><button className="btn btn-primary" form="user-create">Create</button></>}>
         <form id="user-create" onSubmit={create} className="form">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -2749,6 +2756,9 @@ function NewVpsPage() {
   const [users, setUsers] = React.useState<{ id: number; username: string; email: string }[]>([]);
   const [ipPools, setIpPools] = React.useState<{ id: number; node: string; bridge: string; address: string; gateway: string | null; vlan: number | null }[]>([]);
   const [templates, setTemplates] = React.useState<{ id: number; name: string; type: string; storage: string | null; iso: string | null; ostemplate: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; banner: string | null }[]>([]);
+  const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number; format?: string }[]>([]);
+  const [remoteIps, setRemoteIps] = React.useState<{ node: string; iface: string; address: string; netmask: string; gateway?: string; bridge: string }[]>([]);
+  const [fetching, setFetching] = React.useState<'templates' | 'ips' | null>(null);
   const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'custom' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: 'dhcp', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
   const [adv, setAdv] = React.useState(false);
   const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
@@ -2768,6 +2778,31 @@ function NewVpsPage() {
       setF((p) => ({ ...p, type: t.type as 'qemu' | 'lxc', storage: t.storage || p.storage, iso: t.iso || p.iso, ostemplate: t.ostemplate || p.ostemplate, cores: t.defaultCores ? String(t.defaultCores) : p.cores, memory: t.defaultMemory ? String(t.defaultMemory) : p.memory, disk: t.defaultDisk ? String(t.defaultDisk) : p.disk }));
     }
   }, [f.templatePreset, templates]);
+  async function fetchRemoteTemplates() {
+    setFetching('templates');
+    try {
+      const r = await fetch(`/api/proxmox/clusters/${cid}/fetch-templates`, { credentials: 'include' });
+      const j = await r.json();
+      setRemoteTemplates(j.data || []);
+    } catch {}
+    setFetching(null);
+  }
+  async function fetchRemoteIps() {
+    setFetching('ips');
+    try {
+      const r = await fetch(`/api/proxmox/clusters/${cid}/fetch-ips`, { credentials: 'include' });
+      const j = await r.json();
+      setRemoteIps(j.data || []);
+    } catch {}
+    setFetching(null);
+  }
+  function importRemoteTemplate(volid: string, content: string) {
+    if (content === 'iso') setF((p) => ({ ...p, iso: volid }));
+    else setF((p) => ({ ...p, ostemplate: volid }));
+  }
+  function importRemoteIp(addr: string, gateway?: string, bridge?: string) {
+    setF((p) => ({ ...p, ipMode: 'custom', ip: addr, gateway: gateway || p.gateway, bridge: bridge || p.bridge }));
+  }
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setSaving(true);
     const body: Record<string, unknown> = { node: f.node, type: f.type };
@@ -2848,6 +2883,17 @@ function NewVpsPage() {
         {f.ipMode === 'custom' && (
           <label className="field"><span className="label">IP address</span><input className="input mono" value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value })} placeholder="dhcp or 10.0.0.10/24" /></label>
         )}
+        <div style={{ marginBottom: 10 }}>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!f.node || fetching === 'ips'} onClick={fetchRemoteIps}>
+            {fetching === 'ips' ? 'Scanning…' : 'Discover IPs from node'}
+          </button>
+          {remoteIps.length > 0 && (
+            <div className="table-wrap" style={{ marginTop: 8 }}>
+              <table className="table"><thead><tr><th>Interface</th><th>IP</th><th>Gateway</th><th></th></tr></thead>
+              <tbody>{remoteIps.map((r) => <tr key={r.iface + r.address}><td>{r.iface}</td><td className="mono" style={{ fontSize: 12 }}>{r.address}</td><td className="mono" style={{ fontSize: 12 }}>{r.gateway || '—'}</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => importRemoteIp(r.address, r.gateway, r.bridge)}>Use</button></td></tr>)}</tbody></table>
+            </div>
+          )}
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label className="field"><span className="label">Gateway</span><input className="input mono" value={f.gateway} onChange={(e) => setF({ ...f, gateway: e.target.value })} placeholder="10.0.0.1" /></label>
           <label className="field"><span className="label">Nameserver (DNS)</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
@@ -2857,8 +2903,33 @@ function NewVpsPage() {
         {templates.length > 0 && (
           <label className="field"><span className="label">Template preset (optional)</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none, choose manually —</option>{templates.filter((t) => t.type === f.type || f.type === 'qemu' && t.type === 'qemu' || f.type === 'lxc' && t.type === 'lxc').map((t) => <option key={t.id} value={t.id}>{t.name} ({t.type === 'qemu' ? 'QEMU' : 'LXC'})</option>)}</select></label>
         )}
+        <div style={{ marginBottom: 10 }}>
+          <span className="label" style={{ marginBottom: 6, display: 'block' }}>Quick presets</span>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[
+              { label: 'Ubuntu 22.04', type: 'qemu' as const, cores: '2', memory: '2048', disk: '20' },
+              { label: 'Ubuntu 24.04', type: 'qemu' as const, cores: '2', memory: '2048', disk: '20' },
+              { label: 'Debian 12', type: 'qemu' as const, cores: '2', memory: '1024', disk: '20' },
+              { label: 'Windows Server', type: 'qemu' as const, cores: '4', memory: '4096', disk: '50' },
+              { label: 'Ubuntu 22.04 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
+              { label: 'Debian 12 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
+              { label: 'Alpine LXC', type: 'lxc' as const, cores: '1', memory: '256', disk: '2' },
+            ].map((p) => <button key={p.label} type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setF((prev) => ({ ...prev, type: p.type, cores: p.cores, memory: p.memory, disk: p.disk }))}>{p.label}</button>)}
+          </div>
+        </div>
         <label className="field"><span className="label">OS image source</span><select className="input" value={f.type === 'qemu' ? 'iso' : 'ostemplate'} onChange={(e) => setF({ ...f, type: e.target.value === 'iso' ? 'qemu' : 'lxc', iso: '', ostemplate: '' })} style={{ maxWidth: 240, marginBottom: 10 }}><option value="iso">QEMU (ISO install)</option><option value="ostemplate">LXC (template)</option></select></label>
         {f.type === 'qemu' ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label> : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>}
+        <div style={{ marginBottom: 10 }}>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={fetching === 'templates'} onClick={fetchRemoteTemplates}>
+            {fetching === 'templates' ? 'Scanning…' : 'Fetch from Proxmox storage'}
+          </button>
+          {remoteTemplates.length > 0 && (
+            <div className="table-wrap" style={{ marginTop: 8 }}>
+              <table className="table"><thead><tr><th>Name</th><th>Node</th><th>Size</th><th></th></tr></thead>
+              <tbody>{remoteTemplates.map((t) => <tr key={t.volid}><td className="mono" style={{ fontSize: 12 }}>{t.volid.split('/').pop()}</td><td>{t.node}</td><td>{(t.size / 1073741824).toFixed(1)} GB</td><td><button type="button" className="btn btn-ghost btn-sm" onClick={() => importRemoteTemplate(t.volid, t.content)}>Use</button></td></tr>)}</tbody></table>
+            </div>
+          )}
+        </div>
         <label className="field"><span className="label">SSH keys (optional)</span><textarea className="input mono textarea" rows={3} value={f.sshkeys} onChange={(e) => setF({ ...f, sshkeys: e.target.value })} placeholder="ssh-rsa AAAA..." /></label>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdv(!adv)}>{adv ? 'Hide advanced' : 'Show advanced'}</button>
         {adv && <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, marginTop: 10 }}><label className="field"><span className="label">Search domain</span><input className="input mono" value={f.searchdomain} onChange={(e) => setF({ ...f, searchdomain: e.target.value })} placeholder="example.com" /></label></div>}
