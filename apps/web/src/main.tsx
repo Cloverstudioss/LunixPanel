@@ -467,9 +467,9 @@ function ServerCard({ s }: { s: { id: number; name: string; status: string; memo
   );
 }
 
-function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string; assignmentId?: number } }) {
+function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterId?: number; clusterName: string; assignmentId?: number } }) {
   const body = (
-    <div className="server-card" style={{ cursor: v.assignmentId ? 'pointer' : 'default' }}>
+    <div className="server-card" style={{ cursor: 'pointer' }}>
       <div className="server-card-banner">
         <div className="server-card-icon"><FiServer size={20} /></div>
         <span className={`badge badge-${v.status === 'running' ? 'active' : 'suspended'}`} style={{ marginLeft: 'auto' }}>{v.status}</span>
@@ -485,12 +485,15 @@ function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus:
       </div>
     </div>
   );
-  return v.assignmentId ? <NavLink to={`/vps/${v.assignmentId}`} style={{ textDecoration: 'none', color: 'inherit' }}>{body}</NavLink> : body;
+  const href = v.assignmentId ? `/vps/${v.assignmentId}` : (v.clusterId ? `/admin/vps/${v.clusterId}/${v.node}/qemu/${v.vmid}` : '#');
+  return <NavLink to={href} style={{ textDecoration: 'none', color: 'inherit' }}>{body}</NavLink>;
 }
 
 function VpsManage() {
-  const { id } = useParams() as { id: string };
+  const { id, clusterId: cClusterId, node: cNode, type: cType, vmid: cVmid } = useParams() as { id: string; clusterId: string; node: string; type: string; vmid: string };
   const aid = parseInt(id || '0', 10);
+  const isRaw = !!cClusterId && !!cNode && !!cType && !!cVmid;
+  const rawKey = isRaw ? `${cClusterId}:${cNode}:${cType}:${cVmid}` : '';
   const nav = useNavigate();
   const dialog = useConfirm();
   const toast = useToast();
@@ -500,20 +503,23 @@ function VpsManage() {
   const statusStr = String((data?.status as Record<string, unknown>)?.status || (data?.status as Record<string, unknown>)?.qmpstatus || 'unknown');
   const vmName = String((data?.status as Record<string, unknown>)?.name || data?.assignment?.hostname || `VM ${data?.assignment.vmid}`);
   const load = React.useCallback(() => {
-    fetch(`/api/proxmox/vms/${aid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (j.data) setData(j.data); else setErr(j.errors?.[0]?.detail || 'Not found'); }).catch(() => setErr('Failed to load VPS'));
-  }, [aid]);
+    const url = isRaw ? `/api/proxmox/vms/raw/${cClusterId}/${encodeURIComponent(cNode)}/${cType}/${cVmid}` : `/api/proxmox/vms/${aid}`;
+    fetch(url, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (j.data) setData(j.data); else setErr(j.errors?.[0]?.detail || 'Not found'); }).catch(() => setErr('Failed to load VPS'));
+  }, [aid, isRaw, rawKey]);
   React.useEffect(() => { load(); }, [load]);
   React.useEffect(() => { const t = window.setInterval(load, 5000); return () => window.clearInterval(t); }, [load]);
   async function power(action: string) {
     setBusy(action); setErr(''); setMsg('');
-    const r = await fetch(`/api/proxmox/vms/${aid}/power`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
+    const url = isRaw ? `/api/proxmox/vms/raw/${cClusterId}/${encodeURIComponent(cNode)}/${cType}/${cVmid}/power` : `/api/proxmox/vms/${aid}/power`;
+    const r = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(j.errors?.[0]?.detail || `Power ${action} failed`); setBusy(''); return; }
     setMsg(`${action} sent`); toast?.show(`${action} sent`); setBusy(''); setTimeout(load, 800);
   }
   async function openConsole() {
     setErr('');
-    const r = await fetch(`/api/proxmox/vms/${aid}/vncproxy`, { method: 'POST', credentials: 'include' });
+    const url = isRaw ? `/api/proxmox/vms/raw/${cClusterId}/${encodeURIComponent(cNode)}/${cType}/${cVmid}/vncproxy` : `/api/proxmox/vms/${aid}/vncproxy`;
+    const r = await fetch(url, { method: 'POST', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.data) { setErr(j.errors?.[0]?.detail || 'Console not available'); return; }
     const base = j.data.host.replace(/\/$/, '');
@@ -521,7 +527,8 @@ function VpsManage() {
   }
   async function deleteVm() {
     if (!await dialog.confirm({ title: 'Delete VM', message: `Permanently delete ${vmName} (VMID ${data?.assignment.vmid})? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
-    const r = await fetch(`/api/proxmox/vms/${aid}`, { method: 'DELETE', credentials: 'include' });
+    const url = isRaw ? `/api/proxmox/vms/raw/${cClusterId}/${encodeURIComponent(cNode)}/${cType}/${cVmid}` : `/api/proxmox/vms/${aid}`;
+    const r = await fetch(url, { method: 'DELETE', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Delete failed'); return; }
     toast?.show('VM deleted'); nav('/admin/vms');
@@ -602,7 +609,7 @@ function VpsManage() {
 function UserOverview() {
   const { me } = useMe();
   const [servers, setServers] = React.useState<{ id: number; name: string; status: string; memory: number; disk: number; image?: string; banner?: string | null; userId?: number; egg?: { banner?: string | null; name?: string } | null }[]>([]);
-  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterName: string; assignmentId?: number; ownerId?: number }[]>([]);
+  const [vps, setVps] = React.useState<{ vmid: number; name: string; status: string; cpus: number; maxmem: number; maxdisk: number; node: string; clusterId?: number; clusterName: string; assignmentId?: number; ownerId?: number }[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [scope, setScope] = React.useState<'mine' | 'others'>('mine');
   React.useEffect(() => {
@@ -2880,7 +2887,7 @@ function AdminVmsPage() {
             </> : <>
               <button className="btn btn-ghost btn-sm" onClick={() => vmAction(v.node, v.type, v.vmid, 'start')}>Start</button>
             </>}
-            <NavLink to={`/vps/${v.assignmentId}`} className="btn btn-ghost btn-sm">Manage</NavLink>
+            <NavLink to={`/admin/vps/${clusterId}/${v.node}/${v.type}/${v.vmid}`} className="btn btn-ghost btn-sm">Manage</NavLink>
           </div></td>
         </tr>)}</tbody></table></div>
       )}
@@ -3562,6 +3569,7 @@ function AppInner() {
         <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
         <Route path="/server/:id" element={<RequireAuth><ServerManage /></RequireAuth>} />
         <Route path="/vps/:id" element={<RequireAuth><VpsManage /></RequireAuth>} />
+        <Route path="/admin/vps/:clusterId/:node/:type/:vmid" element={<RequireAuth adminOnly><VpsManage /></RequireAuth>} />
         <Route path="/account" element={<Navigate to="/settings" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
