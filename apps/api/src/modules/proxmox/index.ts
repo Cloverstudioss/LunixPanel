@@ -7,7 +7,7 @@ import type { Db } from '../../db/index.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { encrypt } from '../../lib/crypto.js';
-import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces } from '../../lib/proxmox-client.js';
+import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces, deleteVm, renameVm } from '../../lib/proxmox-client.js';
 import { audit, auditIp } from '../../lib/audit.js';
 
 function zJson<T extends z.ZodTypeAny>(s: T) {
@@ -648,6 +648,42 @@ export default function proxmoxRoutes(db: Db) {
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
+  });
+  app.delete('/vms/:id', requireAdmin, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const rows = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id)).limit(1);
+    const a = rows[0];
+    if (!a) return c.json({ errors: [{ code: 'not_found', detail: 'VPS not found' }] }, 404);
+    const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1).then((r) => r[0]);
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const key = process.env.ENCRYPTION_KEY!;
+    try {
+      await deleteVm(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid);
+      await db.delete(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id));
+      const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+      await audit(db, admin.id, 'proxmox.vm.deleted', 'proxmox_vm', String(id), auditIp(c), { clusterId: a.clusterId, node: a.node, type: a.type, vmid: a.vmid });
+      return c.json({ data: { ok: true } });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.patch('/vms/:id', requireAdmin, zJson(z.object({ hostname: z.string().min(1).max(191).optional(), userId: z.number().int().nullable().optional() })), async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const b = c.req.valid('json' as never) as { hostname?: string; userId?: number | null };
+    const rows = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id)).limit(1);
+    const a = rows[0];
+    if (!a) return c.json({ errors: [{ code: 'not_found', detail: 'VPS not found' }] }, 404);
+    if (b.hostname) {
+      const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1).then((r) => r[0]);
+      if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+      const key = process.env.ENCRYPTION_KEY!;
+      try { await renameVm(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, b.hostname); } catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
+    }
+    const update: Record<string, unknown> = {};
+    if (b.hostname) update.hostname = b.hostname;
+    if (b.userId !== undefined) update.userId = b.userId;
+    if (Object.keys(update).length > 0) await db.update(schema.proxmoxVmAssignments).set(update).where(eq(schema.proxmoxVmAssignments.id, id));
+    return c.json({ data: { ok: true } });
   });
   app.post('/clusters/:id/nodes/:node/:type/:vmid/:action', requireAdmin, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);

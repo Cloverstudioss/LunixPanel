@@ -235,7 +235,7 @@ export const themes = pgTable('themes', {
 
 export const auditLogs = pgTable('audit_logs', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
   action: varchar('action', { length: 191 }).notNull(),
   targetType: varchar('target_type', { length: 191 }),
   targetId: varchar('target_id', { length: 191 }),

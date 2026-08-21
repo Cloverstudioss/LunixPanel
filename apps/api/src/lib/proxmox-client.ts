@@ -106,3 +106,16 @@ export async function listNetworkInterfaces(cluster: ProxmoxCluster, encryptionK
   if (!r.ok) throw new Error(`listNetworkInterfaces failed: ${r.status}`);
   return (await r.json() as { data: { iface: string; type: string; address?: string; netmask?: string; gateway?: string; vmbridge?: string; vlan?: string; active: boolean }[] }).data;
 }
+
+export async function deleteVm(cluster: ProxmoxCluster, encryptionKey: string, node: string, type: 'qemu' | 'lxc', vmid: number) {
+  const r = await pveFetch(cluster, encryptionKey, `/nodes/${node}/${type}/${vmid}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`deleteVm failed: ${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+export async function renameVm(cluster: ProxmoxCluster, encryptionKey: string, node: string, type: 'qemu' | 'lxc', vmid: number, hostname: string) {
+  const body = new URLSearchParams({ hostname });
+  const r = await pveFetch(cluster, encryptionKey, `/nodes/${node}/${type}/${vmid}/config`, { method: 'PUT', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+  if (!r.ok) throw new Error(`renameVm failed: ${r.status} ${await r.text()}`);
+  return r.json();
+}

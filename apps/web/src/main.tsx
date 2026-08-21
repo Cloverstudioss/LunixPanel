@@ -491,16 +491,19 @@ function VpsCard({ v }: { v: { vmid: number; name: string; status: string; cpus:
 function VpsManage() {
   const { id } = useParams() as { id: string };
   const aid = parseInt(id || '0', 10);
-  const [data, setData] = React.useState<{ assignment: { id: number; node: string; type: string; vmid: number }; cluster: { id: number; name: string; host: string }; status: Record<string, unknown>; config: Record<string, unknown> } | null>(null);
-  const [err, setErr] = React.useState(''); const [busy, setBusy] = React.useState(''); const [msg, setMsg] = React.useState('');
-  const [tab, setTab] = React.useState<'console' | 'power'>('console');
+  const nav = useNavigate();
+  const dialog = useConfirm();
   const toast = useToast();
+  const [data, setData] = React.useState<{ assignment: { id: number; clusterId: number; node: string; type: string; vmid: number; hostname: string | null; userId: number | null }; cluster: { id: number; name: string; host: string }; status: Record<string, unknown>; config: Record<string, unknown> } | null>(null);
+  const [err, setErr] = React.useState(''); const [busy, setBusy] = React.useState(''); const [msg, setMsg] = React.useState('');
+  const [tab, setTab] = React.useState<'overview' | 'console' | 'settings'>('overview');
   const statusStr = String((data?.status as Record<string, unknown>)?.status || (data?.status as Record<string, unknown>)?.qmpstatus || 'unknown');
+  const vmName = String((data?.status as Record<string, unknown>)?.name || data?.assignment?.hostname || `VM ${data?.assignment.vmid}`);
   const load = React.useCallback(() => {
     fetch(`/api/proxmox/vms/${aid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (j.data) setData(j.data); else setErr(j.errors?.[0]?.detail || 'Not found'); }).catch(() => setErr('Failed to load VPS'));
   }, [aid]);
   React.useEffect(() => { load(); }, [load]);
-  React.useEffect(() => { if (tab === 'console') { const t = window.setInterval(load, 5000); return () => window.clearInterval(t); } }, [tab, load]);
+  React.useEffect(() => { const t = window.setInterval(load, 5000); return () => window.clearInterval(t); }, [load]);
   async function power(action: string) {
     setBusy(action); setErr(''); setMsg('');
     const r = await fetch(`/api/proxmox/vms/${aid}/power`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
@@ -509,53 +512,87 @@ function VpsManage() {
     setMsg(`${action} sent`); toast?.show(`${action} sent`); setBusy(''); setTimeout(load, 800);
   }
   async function openConsole() {
-    setErr(''); setMsg('');
+    setErr('');
     const r = await fetch(`/api/proxmox/vms/${aid}/vncproxy`, { method: 'POST', credentials: 'include' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.data) { setErr(j.errors?.[0]?.detail || 'Console not available'); return; }
-    const pveHost = j.data.host as string;
-    const base = pveHost.replace(/\/$/, '');
+    const base = j.data.host.replace(/\/$/, '');
     window.open(`${base}/?console=kvm&vmid=${data?.assignment.vmid}&node=${data?.assignment.node}&resize=scale`, '_blank');
   }
-  if (err && !data) return <div className="page"><div className="alert alert-error">{err}</div><NavLink to="/" className="btn btn-ghost btn-sm">Back</NavLink></div>;
-  if (!data) return <div className="page"><Skeleton lines={4} /></div>;
+  async function deleteVm() {
+    if (!await dialog.confirm({ title: 'Delete VM', message: `Permanently delete ${vmName} (VMID ${data?.assignment.vmid})? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
+    const r = await fetch(`/api/proxmox/vms/${aid}`, { method: 'DELETE', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Delete failed'); return; }
+    toast?.show('VM deleted'); nav('/admin/vms');
+  }
+  if (err && !data) return <div className="page"><div className="alert alert-error">{err}</div><NavLink to="/admin/vms" className="btn btn-ghost btn-sm">Back</NavLink></div>;
+  if (!data) return <div className="page"><Skeleton lines={6} /></div>;
+  const cfg = data.config as Record<string, unknown>;
+  const st = data.status as Record<string, unknown>;
+  const ip = String(cfg.ip || cfg.net0 || '').match(/(\d+\.\d+\.\d+\.\d+)/)?.[1] || '';
+  const memBytes = typeof st.maxmem === 'number' ? st.maxmem : typeof cfg.memory === 'number' ? cfg.memory * 1024 * 1024 : 0;
+  const memGB = (memBytes / (1024 * 1024 * 1024)).toFixed(1);
+  const diskGB = typeof st.maxdisk === 'number' ? (st.maxdisk / (1024 * 1024 * 1024)).toFixed(0) : '?';
+  const cpuCores = typeof cfg.cores === 'number' ? cfg.cores : typeof st.cpus === 'number' ? st.cpus : '?';
   return (
     <div className="page">
       <div className="page-head" style={{ alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
-          <h1 className="h1">VPS {data.assignment.vmid} · {(data.status as Record<string, unknown>).name as string || `VM ${data.assignment.vmid}`}</h1>
+          <h1 className="h1">{vmName}</h1>
           <p className="lede mono muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: 0 }}>
-            <span>{data.cluster.name} · {data.assignment.node}/{data.assignment.type}</span>
+            <span>{data.cluster.name} · {data.assignment.node}/{data.assignment.type} · VMID {data.assignment.vmid}</span>
+            {ip && <span className="mono">{ip}</span>}
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span className={`status-dot ${statusStr === 'running' ? 'running' : statusStr === 'stopped' ? 'offline' : 'starting'}`} /><span style={{ color: 'var(--muted)' }}>{statusStr}</span></span>
           </p>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button className="btn btn-start btn-sm" disabled={!!busy} onClick={() => power('start')}><FiPlay size={12} /> Start</button>
           <button className="btn btn-stop btn-sm" disabled={!!busy} onClick={() => power('stop')}><FiSquare size={12} /> Stop</button>
-          <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => power('shutdown')}><FiSquare size={12} /> Shutdown</button>
           <button className="btn btn-restart btn-sm" disabled={!!busy} onClick={() => power('reboot')}><FiRotateCcw size={12} /> Reboot</button>
-          <NavLink to="/" className="btn btn-ghost btn-sm"><FiChevronLeft size={12} /> Back</NavLink>
+          <NavLink to="/admin/vms" className="btn btn-ghost btn-sm"><FiChevronLeft size={12} /> Back</NavLink>
         </div>
       </div>
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
-      <div className="tabs"><button className={`tab ${tab === 'console' ? 'tab-active' : ''}`} onClick={() => setTab('console')}>Console</button><button className={`tab ${tab === 'power' ? 'tab-active' : ''}`} onClick={() => setTab('power')}>Details</button></div>
-      {tab === 'console' && (
-        <Card title="Console (noVNC)">
-          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Opens Proxmox noVNC console with a fresh ticket. Allow popups for your PVE host.</p>
-          <div style={{ display: 'flex', gap: 8 }}><button className="btn btn-primary" onClick={openConsole}><FiTerminal size={13} /> Open console</button><button className="btn btn-ghost" onClick={load}><FiRefreshCw size={12} /> Refresh status</button></div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>Ticket is short-lived. If console says expired, click Open again.</div>
-        </Card>
-      )}
-      {tab === 'power' && (
+      <div className="tabs">
+        <button className={`tab ${tab === 'overview' ? 'tab-active' : ''}`} onClick={() => setTab('overview')}><FiServer size={13} /> Overview</button>
+        <button className={`tab ${tab === 'console' ? 'tab-active' : ''}`} onClick={() => setTab('console')}><FiTerminal size={13} /> Console</button>
+        <button className={`tab ${tab === 'settings' ? 'tab-active' : ''}`} onClick={() => setTab('settings')}><FiSettings size={13} /> Settings</button>
+      </div>
+      {tab === 'overview' && (
         <div className="stack">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            <Card title="CPU"><div style={{ fontSize: 22, fontWeight: 700 }}>{cpuCores} cores</div><div className="muted" style={{ fontSize: 12 }}>{data.assignment.type === 'qemu' ? 'QEMU' : 'LXC'}</div></Card>
+            <Card title="Memory"><div style={{ fontSize: 22, fontWeight: 700 }}>{memGB} GB</div><div className="muted" style={{ fontSize: 12 }}>{(memBytes / (1024 * 1024)).toFixed(0)} MB</div></Card>
+            <Card title="Disk"><div style={{ fontSize: 22, fontWeight: 700 }}>{diskGB} GB</div><div className="muted" style={{ fontSize: 12 }}>Proxmox storage</div></Card>
+            {ip && <Card title="IP Address"><div className="mono" style={{ fontSize: 16, fontWeight: 700 }}>{ip}</div><div className="muted" style={{ fontSize: 12 }}>Network interface</div></Card>}
+          </div>
           <Card title="Status">
-            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.status, null, 2)}</pre>
+            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>{JSON.stringify(data.status, null, 2)}</pre>
           </Card>
-          <Card title="Config">
+          <Card title="Configuration">
             <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.config, null, 2)}</pre>
           </Card>
         </div>
+      )}
+      {tab === 'console' && (
+        <Card title="Console (Proxmox noVNC)">
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Opens the Proxmox noVNC console in a new window. Allow popups for your PVE host.</p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={openConsole}><FiTerminal size={13} /> Open console</button>
+            <button className="btn btn-ghost" onClick={load}><FiRefreshCw size={12} /> Refresh status</button>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>Ticket is short-lived. If console says expired, click Open again.</div>
+        </Card>
+      )}
+      {tab === 'settings' && (
+        <Card title="Settings">
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>VMID: <strong>{data.assignment.vmid}</strong> · Node: <strong>{data.assignment.node}</strong> · Cluster: <strong>{data.cluster.name}</strong></p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button className="btn btn-ghost btn-sm" style={{ color: '#ef4444' }} onClick={deleteVm}><FiTrash2 size={13} /> Delete VM</button>
+          </div>
+        </Card>
       )}
     </div>
   );
