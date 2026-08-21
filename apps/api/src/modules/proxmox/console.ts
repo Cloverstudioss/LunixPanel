@@ -87,7 +87,15 @@ export default function proxmoxConsoleRoutes(db: Db) {
           await audit(db, u.id, 'proxmox.console.opened', 'proxmox_vm', String(vm.vmid), auditIp(c as never), { node: vm.node, type: vm.type, vmid: vm.vmid });
         } catch (e) {
           console.error('[pve-console]', e);
-          try { ws.close(4500, `Console error: ${String((e as Error).message).slice(0, 120)}`); } catch { /* ignore */ }
+          const msg = String((e as Error).message);
+          // Translate common PVE failures into actionable close reasons.
+          let reason = msg.slice(0, 140);
+          if (msg.includes('.conf') && msg.includes('does not exist')) {
+            reason = `VM no longer exists on this Proxmox node (stale assignment). Delete and re-create the VPS assignment.`;
+          } else if (msg.includes('401')) {
+            reason = 'Proxmox authentication failed — check the cluster API token.';
+          }
+          try { ws.close(4500, `Console error: ${reason}`); } catch { /* ignore */ }
         }
       },
       onMessage(evt, ws) {
