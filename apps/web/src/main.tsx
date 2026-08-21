@@ -3660,17 +3660,3 @@ createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </QueryClientProvider>,
 );
-
-createRoot(document.getElementById('root')!).render(
-  <QueryClientProvider client={qc}>
-    <BrowserRouter>
-      <AuthProvider>
-        <ToastProvider>
-          <ConfirmProvider>
-            <AppInner />
-          </ConfirmProvider>
-        </ToastProvider>
-      </AuthProvider>
-    </BrowserRouter>
-  </QueryClientProvider>,
-);
