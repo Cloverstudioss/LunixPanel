@@ -44,22 +44,29 @@ export default function ConsoleTab({ vps, vmType }: ConsoleProps) {
 
     try {
       // @ts-expect-error — noVNC ships no type declarations
-      const { default: RFB } = await import('@novnc/novnc');
+      const novnc = await import('@novnc/novnc');
+      const RFB = novnc.default;
+      // Hard-patch Cursor once: over plain HTTP Firefox throws SecurityError when
+      // noVNC assigns a canvas data: URL as style.cursor; that exception escapes
+      // RFB's message loop and freezes the session. Patching the prototype covers
+      // every instance (change/clear/attach/detach).
+      // @ts-expect-error — noVNC exports map only exposes core/rfb.js
+      const cursorMod = await import(/* @vite-ignore */ '@novnc/novnc/core/util/cursor.js').catch(() => null);
+      const CursorProto = (cursorMod as { default?: { prototype?: Record<string, (...a: unknown[]) => unknown> } } | null)?.default?.prototype;
+      if (CursorProto) {
+        for (const key of Object.keys(CursorProto)) {
+          const orig = CursorProto[key];
+          if (typeof orig !== 'function') continue;
+          CursorProto[key] = function (this: unknown, ...args: unknown[]) {
+            try { return orig.apply(this, args); } catch { /* ignore */ }
+          };
+        }
+      }
+      void cursorMod;
       const ws = new WebSocket(url, ['binary']);
       ws.binaryType = 'arraybuffer';
 
       const rfb = new RFB(mountRef.current!, ws, { shared: false });
-      // Over plain HTTP, Firefox throws a SecurityError when noVNC assigns its
-      // canvas cursor (data: URL) — the exception escapes RFB's message handler
-      // and stalls the whole session. Swallow it; only the remote cursor visual
-      // is lost (system cursor is used instead).
-      const cursor = rfb._cursor as { change?: (...a: unknown[]) => void; clear?: (...a: unknown[]) => void } | undefined;
-      if (cursor) {
-        for (const fnName of ['change', 'clear'] as const) {
-          const orig = cursor[fnName]?.bind(cursor);
-          if (orig) cursor[fnName] = (...args: unknown[]) => { try { orig(...args); } catch { /* ignore */ } };
-        }
-      }
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.background = '#0b0b0d';

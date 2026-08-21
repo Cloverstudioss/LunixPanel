@@ -9,6 +9,7 @@ import PveConsoleTab from './features/proxmox/ConsoleTab';
 import PveStatsTab from './features/proxmox/StatsTab';
 import PveSnapshotsTab from './features/proxmox/SnapshotsTab';
 import PveBackupsTab from './features/proxmox/BackupsTab';
+import PveOverviewCards from './features/proxmox/OverviewCards';
 import SchedulesTab from './features/servers/SchedulesTab';
 import DatabasesTab from './features/servers/DatabasesTab';
 import SftpCard from './features/servers/SftpCard';
@@ -577,12 +578,14 @@ function VpsManage() {
             <Card title="Disk"><div style={{ fontSize: 22, fontWeight: 700 }}>{diskGB} GB</div><div className="muted" style={{ fontSize: 12 }}>Proxmox storage</div></Card>
             {ip && <Card title="IP Address"><div className="mono" style={{ fontSize: 16, fontWeight: 700 }}>{ip}</div><div className="muted" style={{ fontSize: 12 }}>Network interface</div></Card>}
           </div>
-          <Card title="Status">
-            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>{JSON.stringify(data.status, null, 2)}</pre>
-          </Card>
-          <Card title="Configuration">
-            <pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.config, null, 2)}</pre>
-          </Card>
+          <PveOverviewCards vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={data.status} />
+          {me?.isAdmin && (
+            <details>
+              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>Raw status / config (debug)</summary>
+              <Card title="Status"><pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>{JSON.stringify(data.status, null, 2)}</pre></Card>
+              <Card title="Configuration"><pre className="pre" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.config, null, 2)}</pre></Card>
+            </details>
+          )}
         </div>
       )}
       {tab === 'console' && (
