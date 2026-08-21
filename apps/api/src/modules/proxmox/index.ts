@@ -534,7 +534,9 @@ export default function proxmoxRoutes(db: Db) {
     if (!vmid) {
       try {
         const existing = await listVms(cluster as never, key);
-        vmid = (existing.reduce((max, v) => Math.max(max, v.vmid), 99) || 99) + 1;
+        const usedVids = new Set(existing.map((v) => v.vmid));
+        vmid = 200;
+        while (usedVids.has(vmid) && vmid < 9999) vmid++;
       } catch { vmid = 200; }
     }
 

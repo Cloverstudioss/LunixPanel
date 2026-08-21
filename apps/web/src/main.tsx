@@ -2495,8 +2495,8 @@ function NewProxmoxClusterPage() {
 }
 
 function ProxmoxIpPoolPage() {
-  const { id } = useParams() as { id: string };
-  const cid = parseInt(id || '0', 10);
+  const { clusterId } = useParams() as { clusterId: string };
+  const cid = parseInt(clusterId || '0', 10);
   const nav = useNavigate();
   const dialog = useConfirm();
   const [cluster, setCluster] = React.useState<{ id: number; name: string } | null>(null);
@@ -2892,7 +2892,7 @@ function CreateVmPage() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
-          <label className="field"><span className="label">Storage</span><select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select></label>
+          <label className="field"><span className="label">Storage</span>{storages.length > 0 ? <select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}><option value="">Choose storage…</option>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select> : <input className="input mono" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })} placeholder="local-lvm" />}</label>
         </div>
       </Card>
       <Card title="Network">
@@ -2907,7 +2907,7 @@ function CreateVmPage() {
         <label className="field"><span className="label">DNS</span><input className="input mono" value={f.nameserver} onChange={(e) => setF({ ...f, nameserver: e.target.value })} placeholder="1.1.1.1" /></label>
       </Card>
       <Card title="OS">
-        {templates.length > 0 && <label className="field"><span className="label">Template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none —</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+        {templates.length > 0 && <label className="field"><span className="label">Template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">\u2014 none \u2014</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
         <label className="field"><span className="label">ISO</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
         <button type="button" className="btn btn-ghost btn-sm" onClick={fetchRemote}>Fetch from Proxmox storage</button>
         {remoteTemplates.filter((t) => t.content === 'iso').length > 0 && (
@@ -2984,7 +2984,7 @@ function CreateLxcPage() {
           <label className="field"><span className="label">RAM (MB)</span><input className="input mono" value={f.memory} onChange={(e) => setF({ ...f, memory: e.target.value })} /></label>
           <label className="field"><span className="label">Disk (GB)</span><input className="input mono" value={f.disk} onChange={(e) => setF({ ...f, disk: e.target.value })} /></label>
         </div>
-        <label className="field"><span className="label">Storage</span><select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select></label>
+        <label className="field"><span className="label">Storage</span>{storages.length > 0 ? <select className="input" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })}><option value="">Choose storage…</option>{storages.map((s) => <option key={s.storage} value={s.storage}>{s.storage} ({s.type})</option>)}</select> : <input className="input mono" value={f.storage} onChange={(e) => setF({ ...f, storage: e.target.value })} placeholder="local-lvm" />}</label>
       </Card>
       <Card title="Network">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
