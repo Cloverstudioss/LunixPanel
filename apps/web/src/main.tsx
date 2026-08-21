@@ -2844,8 +2844,8 @@ function NewVpsPage() {
             <label className="field"><span className="label">VMID (auto if empty)</span><input className="input mono" value={f.vmid} onChange={(e) => setF({ ...f, vmid: e.target.value })} placeholder="101" /></label>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label className="field"><span className="label">Node</span><select className="input" value={f.node} onChange={(e) => setF({ ...f, node: e.target.value })} required><option value="">Choose node…</option>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
-            <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC</option></select></label>
+            <label className="field"><span className="label">Node</span><select className="input" value={f.node} onChange={(e) => setF({ ...f, node: e.target.value, ipMode: 'dhcp', ipPool: '', gateway: '' })} required><option value="">Choose node…</option>{nodes.map((n) => <option key={n.node} value={n.node}>{n.node}</option>)}</select></label>
+            <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc', templatePreset: '' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC</option></select></label>
           </div>
           <label className="field"><span className="label">Owner (auto-assign, optional)</span><select className="input" value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
         </form>
@@ -2915,10 +2915,10 @@ function NewVpsPage() {
               { label: 'Ubuntu 22.04 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
               { label: 'Debian 12 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
               { label: 'Alpine LXC', type: 'lxc' as const, cores: '1', memory: '256', disk: '2' },
-            ].map((p) => <button key={p.label} type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setF((prev) => ({ ...prev, type: p.type, cores: p.cores, memory: p.memory, disk: p.disk }))}>{p.label}</button>)}
+            ].map((p) => <button key={p.label} type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setF((prev) => ({ ...prev, type: p.type, cores: p.cores, memory: p.memory, disk: p.disk, templatePreset: '' }))}>{p.label}</button>)}
           </div>
         </div>
-        <label className="field"><span className="label">OS image source</span><select className="input" value={f.type === 'qemu' ? 'iso' : 'ostemplate'} onChange={(e) => setF({ ...f, type: e.target.value === 'iso' ? 'qemu' : 'lxc', iso: '', ostemplate: '' })} style={{ maxWidth: 240, marginBottom: 10 }}><option value="iso">QEMU (ISO install)</option><option value="ostemplate">LXC (template)</option></select></label>
+        <label className="field"><span className="label">OS image source</span><select className="input" value={f.type === 'qemu' ? 'iso' : 'ostemplate'} onChange={(e) => setF({ ...f, type: e.target.value === 'iso' ? 'qemu' : 'lxc', iso: '', ostemplate: '', templatePreset: '' })} style={{ maxWidth: 240, marginBottom: 10 }}><option value="iso">QEMU (ISO install)</option><option value="ostemplate">LXC (template)</option></select></label>
         {f.type === 'qemu' ? <label className="field"><span className="label">ISO (qemu) — storage:iso/file.iso</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label> : <label className="field"><span className="label">OS template (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>}
         <div style={{ marginBottom: 10 }}>
           <button type="button" className="btn btn-ghost btn-sm" disabled={fetching === 'templates'} onClick={fetchRemoteTemplates}>
