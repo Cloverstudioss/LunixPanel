@@ -10,9 +10,12 @@ import { startExpiryCron } from './cron/expiryChecker.js';
 import authRoutes from './modules/auth/index.js';
 import eggRoutes from './modules/eggs/index.js';
 import proxmoxRoutes from './modules/proxmox/index.js';
+import proxmoxConsoleRoutes from './modules/proxmox/console.js';
 import userRoutes from './modules/users/index.js';
 import nodeRoutes from './modules/nodes/index.js';
 import serverRoutes from './modules/servers/index.js';
+import scheduleRoutes, { startScheduleRunner } from './modules/schedules/index.js';
+import databaseRoutes from './modules/databases/index.js';
 import remoteRoutes from './modules/remote/index.js';
 import settingsRoutes from './modules/settings/index.js';
 import themeRoutes from './modules/themes/index.js';
@@ -64,9 +67,12 @@ if (db) {
   app.route('/api/auth', authRoutes(db));
   app.route('/api/eggs', eggRoutes(db));
   app.route('/api/proxmox', proxmoxRoutes(db));
+  app.route('/api/proxmox', proxmoxConsoleRoutes(db));
   app.route('/api/users', userRoutes(db));
   app.route('/api/nodes', nodeRoutes(db));
   app.route('/api/servers', serverRoutes(db));
+  app.route('/api/schedules', scheduleRoutes(db));
+  app.route('/api/databases', databaseRoutes(db));
   app.route('/api/settings', settingsRoutes(db));
   app.route('/api/themes', themeRoutes(db));
   app.route('/api/audit', auditRoutes(db));
@@ -76,7 +82,10 @@ if (db) {
     return c.json({ data: u });
   });
 
-  if (process.env.NODE_ENV !== 'test') startExpiryCron(db, GRACE_DAYS);
+  if (process.env.NODE_ENV !== 'test') {
+    startExpiryCron(db, GRACE_DAYS);
+    startScheduleRunner(db);
+  }
 }
 
 app.onError((err, c) => {
@@ -85,5 +94,6 @@ app.onError((err, c) => {
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);
-export default { port, fetch: app.fetch };
+const { websocket: bunWebSocketHandler } = await import('hono/bun');
+export default { port, fetch: app.fetch, websocket: bunWebSocketHandler };
 export { app, db };

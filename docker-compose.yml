@@ -34,7 +34,7 @@ services:
 
   web:
     build: { context: ., dockerfile: apps/web/Dockerfile }
-    ports: ["25050:80"]
+    ports: ["25050:80", "25051:443"]
     depends_on:
       api: { condition: service_started }
 

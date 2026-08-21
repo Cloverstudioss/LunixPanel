@@ -2,9 +2,16 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FiGrid, FiLayout, FiMoon, FiSun, FiEdit3, FiCheck, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase, FiMoreVertical, FiCheckSquare, FiArchive, FiRefreshCw } from 'react-icons/fi';
+import { FiGrid, FiLayout, FiMoon, FiSun, FiEdit3, FiCheck, FiServer, FiUser, FiBox, FiHardDrive, FiCloud, FiInbox, FiUsers, FiLogOut, FiActivity, FiTrash2, FiCopy, FiTerminal, FiFolder, FiCpu, FiGlobe, FiSettings, FiPlay, FiSquare, FiRotateCcw, FiUpload, FiDownload, FiPlus, FiChevronLeft, FiSave, FiX, FiFile, FiDatabase, FiMoreVertical, FiCheckSquare, FiArchive, FiRefreshCw, FiCamera } from 'react-icons/fi';
 import { QyroMark } from './QyroBrand';
 import { applyTheme, THEME_PRESETS, THEME_COLOR_KEYS, DEFAULT_DARK_COLORS, type ThemeColors, type ThemePreset } from './lib/theme';
+import PveConsoleTab from './features/proxmox/ConsoleTab';
+import PveStatsTab from './features/proxmox/StatsTab';
+import PveSnapshotsTab from './features/proxmox/SnapshotsTab';
+import PveBackupsTab from './features/proxmox/BackupsTab';
+import SchedulesTab from './features/servers/SchedulesTab';
+import DatabasesTab from './features/servers/DatabasesTab';
+import SftpCard from './features/servers/SftpCard';
 import './styles.css';
 
 const qc = new QueryClient();
@@ -497,9 +504,10 @@ function VpsManage() {
   const nav = useNavigate();
   const dialog = useConfirm();
   const toast = useToast();
+  const { me } = useMe();
   const [data, setData] = React.useState<{ assignment: { id: number; clusterId: number; node: string; type: string; vmid: number; hostname: string | null; userId: number | null }; cluster: { id: number; name: string; host: string }; status: Record<string, unknown>; config: Record<string, unknown> } | null>(null);
   const [err, setErr] = React.useState(''); const [busy, setBusy] = React.useState(''); const [msg, setMsg] = React.useState('');
-  const [tab, setTab] = React.useState<'overview' | 'console' | 'settings'>('overview');
+  const [tab, setTab] = React.useState<'overview' | 'console' | 'stats' | 'snapshots' | 'backups' | 'settings'>('overview');
   const statusStr = String((data?.status as Record<string, unknown>)?.status || (data?.status as Record<string, unknown>)?.qmpstatus || 'unknown');
   const vmName = String((data?.status as Record<string, unknown>)?.name || data?.assignment?.hostname || `VM ${data?.assignment.vmid}`);
   const load = React.useCallback(() => {
@@ -515,15 +523,6 @@ function VpsManage() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(j.errors?.[0]?.detail || `Power ${action} failed`); setBusy(''); return; }
     setMsg(`${action} sent`); toast?.show(`${action} sent`); setBusy(''); setTimeout(load, 800);
-  }
-  async function openConsole() {
-    setErr('');
-    const url = isRaw ? `/api/proxmox/vms/raw/${cClusterId}/${encodeURIComponent(cNode)}/${cType}/${cVmid}/vncproxy` : `/api/proxmox/vms/${aid}/vncproxy`;
-    const r = await fetch(url, { method: 'POST', credentials: 'include' });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.data) { setErr(j.errors?.[0]?.detail || 'Console not available'); return; }
-    const base = j.data.host.replace(/\/$/, '');
-    window.open(`${base}/?console=kvm&vmid=${data?.assignment.vmid}&node=${data?.assignment.node}&resize=scale`, '_blank');
   }
   async function deleteVm() {
     if (!await dialog.confirm({ title: 'Delete VM', message: `Permanently delete ${vmName} (VMID ${data?.assignment.vmid})? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
@@ -565,6 +564,9 @@ function VpsManage() {
       <div className="tabs">
         <button className={`tab ${tab === 'overview' ? 'tab-active' : ''}`} onClick={() => setTab('overview')}><FiServer size={13} /> Overview</button>
         <button className={`tab ${tab === 'console' ? 'tab-active' : ''}`} onClick={() => setTab('console')}><FiTerminal size={13} /> Console</button>
+        <button className={`tab ${tab === 'stats' ? 'tab-active' : ''}`} onClick={() => setTab('stats')}><FiActivity size={13} /> Stats</button>
+        <button className={`tab ${tab === 'snapshots' ? 'tab-active' : ''}`} onClick={() => setTab('snapshots')}><FiCamera size={13} /> Snapshots</button>
+        <button className={`tab ${tab === 'backups' ? 'tab-active' : ''}`} onClick={() => setTab('backups')}><FiDatabase size={13} /> Backups</button>
         <button className={`tab ${tab === 'settings' ? 'tab-active' : ''}`} onClick={() => setTab('settings')}><FiSettings size={13} /> Settings</button>
       </div>
       {tab === 'overview' && (
@@ -584,20 +586,23 @@ function VpsManage() {
         </div>
       )}
       {tab === 'console' && (
-        <Card title="Console (Proxmox noVNC)">
-          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Opens the Proxmox noVNC console in a new window. Allow popups for your PVE host.</p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-primary" onClick={openConsole}><FiTerminal size={13} /> Open console</button>
-            <button className="btn btn-ghost" onClick={load}><FiRefreshCw size={12} /> Refresh status</button>
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>Ticket is short-lived. If console says expired, click Open again.</div>
-        </Card>
+        <PveConsoleTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} vmType={(data.assignment.type === 'lxc' ? 'lxc' : 'qemu')} />
+      )}
+      {tab === 'stats' && (
+        <PveStatsTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={data.status} />
+      )}
+      {tab === 'snapshots' && (
+        <PveSnapshotsTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} toast={toast?.show} />
+      )}
+      {tab === 'backups' && (
+        <PveBackupsTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} toast={toast?.show} />
       )}
       {tab === 'settings' && (
         <Card title="Settings">
           <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>VMID: <strong>{data.assignment.vmid}</strong> · Node: <strong>{data.assignment.node}</strong> · Cluster: <strong>{data.cluster.name}</strong></p>
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-            <button className="btn btn-ghost btn-sm" style={{ color: '#ef4444' }} onClick={deleteVm}><FiTrash2 size={13} /> Delete VM</button>
+            {me?.isAdmin && <button className="btn btn-ghost btn-sm" style={{ color: '#ef4444' }} onClick={deleteVm}><FiTrash2 size={13} /> Delete VM</button>}
+            {!me?.isAdmin && <span className="muted" style={{ fontSize: 12 }}>Contact an admin to delete this VPS.</span>}
           </div>
         </Card>
       )}
@@ -696,6 +701,8 @@ function ServerManage() {
   const tabs = [
     { key: 'console', label: 'Console', Icon: FiTerminal },
     { key: 'files', label: 'Files', Icon: FiFolder },
+    { key: 'databases', label: 'Databases', Icon: FiDatabase },
+    { key: 'schedules', label: 'Schedules', Icon: FiActivity },
     { key: 'backups', label: 'Backups', Icon: FiDatabase },
     { key: 'allocations', label: 'Allocations', Icon: FiGlobe },
     { key: 'startup', label: 'Startup', Icon: FiCpu },
@@ -723,10 +730,12 @@ function ServerManage() {
       <div className="tabs">{tabs.map((t) => <button key={t.key} className={`tab ${tab === t.key ? 'tab-active' : ''}`} onClick={() => setTab(t.key)}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><t.Icon size={13} />{t.label}</span></button>)}</div>
       {tab === 'console' && <ConsoleTab id={sid} srv={srv} onStatus={setLiveStatus} />}
       {tab === 'files' && <FilesTab id={sid} />}
+      {tab === 'databases' && <DatabasesTab serverId={sid} />}
+      {tab === 'schedules' && <SchedulesTab serverId={sid} />}
       {tab === 'backups' && <BackupsTab id={sid} />}
       {tab === 'allocations' && <AllocationsTab id={sid} srv={srv} />}
       {tab === 'startup' && <StartupTab id={sid} />}
-      {tab === 'settings' && <SettingsTab id={sid} srv={srv} onSaved={(d) => setSrv((p) => (p ? { ...p, ...d } : p))} />}
+      {tab === 'settings' && <SettingsTab id={sid} srv={srv} onSaved={(d) => setSrv((p) => (p ? { ...p, ...d } : p))} sftp={<SftpCard serverId={sid} />} />}
     </div>
   );
 }
@@ -971,6 +980,24 @@ function FilesTab({ id }: { id: number }) {
           )}
           <button className="btn btn-ghost btn-sm" onClick={() => { setShowNewFolder(true); }}><FiPlus size={12} /> Folder</button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setShowNewFile(true); }}><FiPlus size={12} /> File</button>
+          <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer', marginBottom: 0 }}>
+            <FiUpload size={12} /> Upload
+            <input type="file" multiple style={{ display: 'none' }} onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              e.target.value = '';
+              (async () => {
+                for (const file of files) {
+                  setMsg(`Uploading ${file.name}…`);
+                  try {
+                    const r = await fetch(`/api/servers/${id}/files/upload?directory=${encodeURIComponent(dir)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+                    if (!r.ok) { const j = await r.json().catch(() => ({})); setMsg(j.errors?.[0]?.detail || `Upload of ${file.name} failed`); return; }
+                  } catch { setMsg(`Upload of ${file.name} failed`); return; }
+                }
+                setMsg(`Uploaded ${files.length} file${files.length === 1 ? '' : 's'}.`);
+                load();
+              })();
+            }} />
+          </label>
         </span>
       </div>
       {showNewFolder && (
@@ -1098,20 +1125,21 @@ function BackupsTab({ id }: { id: number }) {
 }
 
 function AllocationsTab({ id, srv }: { id: number; srv: { allocation: { id: number; ip: string; port: number } | null; node: { name: string; scheme: string; fqdn: string; daemonListen: number } | null } }) {
-  const [data, setData] = React.useState<{ primary_id: number | null; assigned: { id: number; ip: string; port: number; alias?: string | null }[]; limit: number; can_add: boolean; free_count: number } | null>(null);
+  const [data, setData] = React.useState<{ primary_id: number | null; assigned: { id: number; ip: string; port: number; alias?: string | null }[]; limit: number; can_add: boolean; free_count: number; free?: { id: number; ip: string; port: number; ipAlias?: string | null }[] } | null>(null);
   const [busy, setBusy] = React.useState('');
   const [msg, setMsg] = React.useState('');
   const [err, setErr] = React.useState('');
+  const [picked, setPicked] = React.useState('');
   const load = React.useCallback(() => {
     fetch(`/api/servers/${id}/allocations`, { credentials: 'include' }).then((r) => r.json()).then((j) => setData(j.data || null));
   }, [id]);
   React.useEffect(() => { load(); }, [load]);
   async function assign() {
     setBusy('add'); setErr(''); setMsg('');
-    const r = await fetch(`/api/servers/${id}/allocations`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const r = await fetch(`/api/servers/${id}/allocations`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(picked ? { allocationId: parseInt(picked, 10) } : {}) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed to add allocation'); } else setMsg(`Added ${j.data?.allocation?.ip}:${j.data?.allocation?.port}.`);
-    setBusy(''); load();
+    setPicked(''); setBusy(''); load();
   }
   async function remove(aid: number) {
     setBusy(String(aid)); setErr(''); setMsg('');
@@ -1125,7 +1153,17 @@ function AllocationsTab({ id, srv }: { id: number; srv: { allocation: { id: numb
     <div className="stack">
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
-      <Card title={`Allocations (${data?.assigned.length ?? 0}${data && data.limit !== 0 ? ` / ${data.limit}` : ''})`} action={<button className="btn btn-primary btn-sm" disabled={busy === 'add' || atLimit || (data ? !data.can_add : true)} onClick={assign}><FiPlus size={13} /> {busy === 'add' ? 'Adding…' : 'Add allocation'}</button>}>
+      <Card title={`Allocations (${data?.assigned.length ?? 0}${data && data.limit !== 0 ? ` / ${data.limit}` : ''})`} action={
+        <div style={{ display: 'flex', gap: 6 }}>
+          {data && data.can_add && (data.free?.length || data.free_count) ? (
+            <select className="input" style={{ width: 150, minHeight: 30 }} value={picked} onChange={(e) => setPicked(e.target.value)}>
+              <option value="">Auto-assign port</option>
+              {(data.free || []).map((f) => <option key={f.id} value={f.id}>{f.ip}:{f.port}</option>)}
+            </select>
+          ) : null}
+          <button className="btn btn-primary btn-sm" disabled={busy === 'add' || atLimit || (data ? !data.can_add : true)} onClick={assign}><FiPlus size={13} /> {busy === 'add' ? 'Adding…' : 'Add allocation'}</button>
+        </div>
+      }>
         {data && data.assigned.map((a) => (
           <div key={a.id} className="alloc-row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1212,7 +1250,7 @@ function StartupTab({ id }: { id: number }) {
   );
 }
 
-function SettingsTab({ id, srv, onSaved }: { id: number; srv: { name: string; description: string | null; banner: string | null; memory: number; disk: number; cpu: number; image: string; egg?: { banner?: string | null; name?: string } | null }; onSaved: (d: Partial<{ name: string; description: string | null; banner: string | null }>) => void }) {
+function SettingsTab({ id, srv, onSaved, sftp }: { id: number; srv: { name: string; description: string | null; banner: string | null; memory: number; disk: number; cpu: number; image: string; egg?: { banner?: string | null; name?: string } | null }; onSaved: (d: Partial<{ name: string; description: string | null; banner: string | null }>) => void; sftp?: React.ReactNode }) {
   const dialog = useConfirm();
   const [name, setName] = React.useState(srv.name);
   const [description, setDescription] = React.useState(srv.description || '');
@@ -1260,6 +1298,7 @@ function SettingsTab({ id, srv, onSaved }: { id: number; srv: { name: string; de
       <Card title="Allocation">
         <p className="mono muted" style={{ margin: 0 }}>{srv.image.split('/').pop()?.split(':')[0] || 'unknown'} · {srv.memory} MB RAM · {srv.disk} MB disk · {srv.cpu}% CPU</p>
       </Card>
+      {sftp}
       <Card title="Danger zone">
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Reinstalling wipes all server files and re-runs the egg install script.</p>
         <button className="btn btn-danger" disabled={booting} onClick={reinstall}>{booting ? 'Reinstalling…' : 'Reinstall server'}</button>

@@ -7,8 +7,11 @@ import type { Db } from '../../db/index.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { encrypt } from '../../lib/crypto.js';
-import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces, deleteVm, renameVm } from '../../lib/proxmox-client.js';
+import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces, deleteVm, renameVm, waitForTask, listSnapshots, createSnapshot, rollbackSnapshot, deleteSnapshot, createBackup, listBackups, restoreQemu, restoreLxc, getVmRrdData, getTaskStatus } from '../../lib/proxmox-client.js';
 import { audit, auditIp } from '../../lib/audit.js';
+
+const QEMU_ACTIONS = ['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume'];
+const LXC_ACTIONS = ['start', 'stop', 'shutdown', 'reboot'];
 
 function zJson<T extends z.ZodTypeAny>(s: T) {
   return validator('json', (value, c) => {
@@ -67,14 +70,11 @@ export default function proxmoxRoutes(db: Db) {
     const key = process.env.ENCRYPTION_KEY!;
     let health: { status: string; version?: string | null; detail?: string } = { status: 'unknown' };
     try {
-      const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      if (!cluster.verifyTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-      let r: Response;
-      try {
-        r = await fetch(`${cluster.host.replace(/\/$/, '')}/api2/json/version`, { headers: { Authorization: `PVEAPIToken=${cluster.apiTokenId}=${(await import('../../lib/crypto.js')).decrypt(cluster.apiTokenSecretEncrypted, key)}` } } as RequestInit);
-      } finally {
-        if (!cluster.verifyTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
-      }
+      const r = await fetch(`${cluster.host.replace(/\/$/, '')}/api2/json/version`, {
+        headers: { Authorization: `PVEAPIToken=${cluster.apiTokenId}=${(await import('../../lib/crypto.js')).decrypt(cluster.apiTokenSecretEncrypted, key)}` },
+        tls: { rejectUnauthorized: !!cluster.verifyTls },
+        signal: AbortSignal.timeout(15000),
+      } as RequestInit);
       health = r.ok ? { status: 'online', version: ((await r.json().catch(() => ({}))) as { data?: { version?: string } }).data?.version || null } : { status: 'error', detail: `HTTP ${r.status}` };
     } catch (e) { health = { status: 'error', detail: String((e as Error).message) }; }
     const assignments = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.clusterId, id));
@@ -425,12 +425,11 @@ export default function proxmoxRoutes(db: Db) {
   app.post('/clusters/test-connection', requireAdmin, zJson(z.object({ host: z.string().url(), api_token_id: z.string().min(1), api_token_secret: z.string().min(1), verify_tls: z.boolean().optional() })), async (c) => {
     const b = c.req.valid('json' as never) as { host: string; api_token_id: string; api_token_secret: string; verify_tls?: boolean };
     const host = b.host.replace(/\/$/, '');
-    const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    if (!b.verify_tls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     try {
+      const headers = { Authorization: `PVEAPIToken=${b.api_token_id}=${b.api_token_secret}` };
       const [versionRes, nodesRes] = await Promise.all([
-        fetch(`${host}/api2/json/version`, { headers: { Authorization: `PVEAPIToken=${b.api_token_id}=${b.api_token_secret}` } } as RequestInit),
-        fetch(`${host}/api2/json/nodes`, { headers: { Authorization: `PVEAPIToken=${b.api_token_id}=${b.api_token_secret}` } } as RequestInit),
+        fetch(`${host}/api2/json/version`, { headers, tls: { rejectUnauthorized: !!b.verify_tls }, signal: AbortSignal.timeout(15000) } as RequestInit),
+        fetch(`${host}/api2/json/nodes`, { headers, tls: { rejectUnauthorized: !!b.verify_tls }, signal: AbortSignal.timeout(15000) } as RequestInit),
       ]);
       if (!versionRes.ok) return c.json({ errors: [{ code: 'auth_failed', detail: `Authentication failed — HTTP ${versionRes.status}` }] }, 422);
       const versionData = await versionRes.json().catch(() => ({})) as { data?: { version?: string; release?: string } };
@@ -439,22 +438,38 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ data: { ok: true, version: versionData.data?.version || null, release: versionData.data?.release || null, nodes } });
     } catch (e) {
       return c.json({ errors: [{ code: 'connection_failed', detail: `Cannot reach ${host} — ${(e as Error).message}` }] }, 422);
-    } finally {
-      if (!b.verify_tls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
     }
   });
-  app.post('/assignments', requireAdmin, zJson(z.object({ clusterId: z.number().int(), node: z.string().min(1), type: z.enum(['qemu', 'lxc']), vmid: z.number().int(), userId: z.number().int() })), async (c) => {
-    const b = c.req.valid('json' as never) as { clusterId: number; node: string; type: 'qemu' | 'lxc'; vmid: number; userId: number };
+  app.post('/assignments', requireAdmin, zJson(z.object({ clusterId: z.number().int(), node: z.string().min(1), type: z.enum(['qemu', 'lxc']), vmid: z.number().int(), userId: z.number().int(), expiresAt: z.string().datetime().nullable().optional() })), async (c) => {
+    const b = c.req.valid('json' as never) as { clusterId: number; node: string; type: 'qemu' | 'lxc'; vmid: number; userId: number; expiresAt?: string | null };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, b.clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
     const user = await db.select().from(schema.users).where(eq(schema.users.id, b.userId)).limit(1).then((r) => r[0]);
     if (!user) return c.json({ errors: [{ code: 'not_found', detail: 'User not found' }] }, 404);
     const existing = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, b.clusterId), eq(schema.proxmoxVmAssignments.node, b.node), eq(schema.proxmoxVmAssignments.type, b.type), eq(schema.proxmoxVmAssignments.vmid, b.vmid))).limit(1);
     if (existing[0]) return c.json({ errors: [{ code: 'conflict', detail: 'VM already assigned' }] }, 409);
-    const [row] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId }).returning();
+    const [row] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning();
     const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await audit(db, admin.id, 'proxmox.assigned', 'proxmox_vm', String(row.id), auditIp(c), { clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId });
     return c.json({ data: row }, 201);
+  });
+  app.patch('/assignments/:id', requireAdmin, zJson(z.object({ expiresAt: z.string().datetime().nullable().optional() })), async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const b = c.req.valid('json' as never) as { expiresAt?: string | null };
+    const rows = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id)).limit(1);
+    if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Assignment not found' }] }, 404);
+    const update: Record<string, unknown> = {};
+    if (b.expiresAt !== undefined) update.expiresAt = b.expiresAt ? new Date(b.expiresAt) : null;
+    // Clearing expiry or moving it forward reactivates a suspended VPS.
+    if (b.expiresAt === null || (b.expiresAt && new Date(b.expiresAt) > new Date())) {
+      update.graceUntil = null;
+      update.suspendedAt = null;
+      update.suspendedReason = null;
+    }
+    const [row] = await db.update(schema.proxmoxVmAssignments).set(update).where(eq(schema.proxmoxVmAssignments.id, id)).returning();
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.assignment.updated', 'proxmox_vm', String(id), auditIp(c), { fields: Object.keys(update) });
+    return c.json({ data: row });
   });
   app.delete('/assignments/:id', requireAdmin, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
@@ -552,11 +567,11 @@ export default function proxmoxRoutes(db: Db) {
       if (hostname) params.name = hostname;
       params['scsi0'] = `${storage}:${diskGB}`;
       let net0 = `virtio,bridge=${bridge}`;
-      if (ip && ip !== 'dhcp') net0 += `,ip=${ip}`;
-      else if (ip === 'dhcp') net0 += `,ip=dhcp`;
-      if (gateway) net0 += `,gw=${gateway}`;
       if (templateVlan) net0 += `,tag=${templateVlan}`;
       params.net0 = net0;
+      // QEMU static networking is cloud-init based (net0 ip=/gw= is LXC-only syntax).
+      params.ipconfig0 = ip !== 'dhcp' ? `ip=${ip}${gateway ? `,gw=${gateway}` : ''}` : 'ip=dhcp';
+      params['ide0'] = `${storage}:cloudinit`;
       if (b.nameserver) params.nameserver = b.nameserver;
       if (b.searchdomain) params.searchdomain = b.searchdomain;
       if (iso) params.ide2 = `${iso},media=cdrom`;
@@ -578,10 +593,11 @@ export default function proxmoxRoutes(db: Db) {
       if (b.sshkeys) params['ssh-public-keys'] = encodeURIComponent(b.sshkeys);
       params.unprivileged = 1;
     }
+    let createdAssignmentId: number | undefined;
     try {
       const res = b.type === 'qemu' ? await createQemu(cluster as never, key, b.node, params) : await createLxc(cluster as never, key, b.node, params);
+      const upid = (res as { data?: string }).data || '';
       const createdVmid = vmid!;
-      let createdAssignmentId;
       if (b.userId && createdVmid) {
         const [assign] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid: createdVmid, userId: b.userId }).returning();
         createdAssignmentId = assign?.id;
@@ -591,7 +607,19 @@ export default function proxmoxRoutes(db: Db) {
       }
       const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
       await audit(db, admin.id, 'proxmox.created', 'proxmox_vm', `${id}/${b.node}/${createdVmid}`, auditIp(c), { node: b.node, type: b.type, vmid: createdVmid, hostname });
-      return c.json({ data: res }, 201);
+      // Wait briefly for the create task so failures surface; long installs return the UPID for polling.
+      let taskStatus: 'completed' | 'running' | 'failed' = 'completed';
+      let taskError: string | null = null;
+      if (upid) {
+        try { await waitForTask(cluster as never, key, b.node, upid, { timeoutMs: 60000, intervalMs: 2000 }); }
+        catch (e) {
+          const msg = String((e as Error).message);
+          taskStatus = msg.includes('timed out') ? 'running' : 'failed';
+          if (taskStatus === 'failed') taskError = msg;
+        }
+      }
+      if (taskStatus === 'failed') return c.json({ errors: [{ code: 'proxmox_error', detail: taskError || 'Proxmox task failed' }] }, 502);
+      return c.json({ data: { upid, vmid: createdVmid, assignmentId: createdAssignmentId ?? null, task: taskStatus } }, taskStatus === 'running' ? 202 : 201);
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
@@ -622,6 +650,8 @@ export default function proxmoxRoutes(db: Db) {
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
     const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, clusterId), eq(schema.proxmoxVmAssignments.node, node), eq(schema.proxmoxVmAssignments.type, type), eq(schema.proxmoxVmAssignments.vmid, vmid))).limit(1);
+    // Unassigned VMs are infrastructure — only admins may inspect them.
+    if (!existing && !u.isAdmin) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
     if (existing && !u.isAdmin && existing.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
     const a = existing || { id: 0, clusterId, node, type, vmid, hostname: null, userId: null };
     const key = process.env.ENCRYPTION_KEY!;
@@ -642,9 +672,12 @@ export default function proxmoxRoutes(db: Db) {
     if (!u.isAdmin && a.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const vmType = a.type as 'qemu' | 'lxc';
+    const allowed = vmType === 'qemu' ? QEMU_ACTIONS : LXC_ACTIONS;
+    if (!allowed.includes(b.action)) return c.json({ errors: [{ code: 'validation', detail: `Action "${b.action}" is not supported for ${vmType === 'qemu' ? 'QEMU VMs' : 'LXC containers'}` }] }, 400);
     const key = process.env.ENCRYPTION_KEY!;
     try {
-      const res = await vmAction(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, b.action);
+      const res = await vmAction(cluster as never, key, a.node, vmType, a.vmid, b.action);
       await audit(db, u.id, `proxmox.power.${b.action}`, 'proxmox_vm', String(id), auditIp(c), { clusterId: a.clusterId, node: a.node, type: a.type, vmid: a.vmid });
       return c.json({ data: res });
     } catch (e) {
@@ -681,11 +714,12 @@ export default function proxmoxRoutes(db: Db) {
       const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, clusterId), eq(schema.proxmoxVmAssignments.node, node), eq(schema.proxmoxVmAssignments.type, type), eq(schema.proxmoxVmAssignments.vmid, vmid))).limit(1);
       if (!existing || existing.userId !== u.id) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
     }
+    const allowed = type === 'qemu' ? QEMU_ACTIONS : LXC_ACTIONS;
+    if (!allowed.includes(b.action)) return c.json({ errors: [{ code: 'validation', detail: `Action "${b.action}" is not supported for ${type === 'qemu' ? 'QEMU VMs' : 'LXC containers'}` }] }, 400);
     const key = process.env.ENCRYPTION_KEY!;
     try {
       const res = await vmAction(cluster as never, key, node, type, vmid, b.action);
-      const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
-      await audit(db, admin.id, `proxmox.power.${b.action}`, 'proxmox_vm', `${clusterId}/${node}/${vmid}`, auditIp(c), { clusterId, node, type, vmid });
+      await audit(db, u.id, `proxmox.power.${b.action}`, 'proxmox_vm', `${clusterId}/${node}/${vmid}`, auditIp(c), { clusterId, node, type, vmid });
       return c.json({ data: res });
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
@@ -774,6 +808,8 @@ export default function proxmoxRoutes(db: Db) {
     const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
     const cluster = rows[0];
     if (!cluster || !['qemu', 'lxc'].includes(type)) return c.json({ errors: [{ code: 'not_found', detail: 'Not found' }] }, 404);
+    const allowed = type === 'qemu' ? QEMU_ACTIONS : LXC_ACTIONS;
+    if (!allowed.includes(action)) return c.json({ errors: [{ code: 'validation', detail: `Unsupported action "${action}"` }] }, 400);
     const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     const key = process.env.ENCRYPTION_KEY!;
     try {
@@ -783,6 +819,302 @@ export default function proxmoxRoutes(db: Db) {
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
+  });
+
+  // ── VPS suspension (expiry enforcement) ──
+
+  async function loadOwnedVm(cx: any) {
+    const id = parseInt(cx.req.param('id') || '0', 10);
+    const u = (cx as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
+    const a = (await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id)).limit(1))[0];
+    if (!a) return { res: cx.json({ errors: [{ code: 'not_found', detail: 'VPS not found' }] }, 404) };
+    if (!u.isAdmin && a.userId !== u.id) return { res: cx.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403) };
+    return { a, u };
+  }
+
+  app.post('/vms/:id/suspend', requireAdmin, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const [row] = await db.update(schema.proxmoxVmAssignments).set({ suspendedAt: new Date(), suspendedReason: 'manual' }).where(eq(schema.proxmoxVmAssignments.id, a.id)).returning();
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (cluster) {
+      try { await vmAction(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, a.type === 'qemu' ? 'suspend' : 'stop'); }
+      catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
+    }
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.vps.suspended', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid });
+    return c.json({ data: row });
+  });
+  app.post('/vms/:id/resume', requireAdmin, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const [row] = await db.update(schema.proxmoxVmAssignments).set({ suspendedAt: null, suspendedReason: null }).where(eq(schema.proxmoxVmAssignments.id, a.id)).returning();
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (cluster) {
+      try { await vmAction(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, a.type === 'qemu' ? 'resume' : 'start'); }
+      catch (e) { return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502); }
+    }
+    const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+    await audit(db, admin.id, 'proxmox.vps.resumed', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid });
+    return c.json({ data: row });
+  });
+
+  // ── Snapshots ──
+
+  app.get('/vms/:id/snapshots', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const snaps = await listSnapshots(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid);
+      return c.json({ data: snaps });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.post('/vms/:id/snapshots', requireAuth, zJson(z.object({ name: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_]+$/), description: z.string().max(500).optional(), includeRam: z.boolean().optional() })), async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a, u } = loaded;
+    const b = c.req.valid('json' as never) as { name: string; description?: string; includeRam?: boolean };
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const res = await createSnapshot(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, b);
+      const upid = (res as { data?: string }).data || '';
+      let task: 'completed' | 'running' | 'failed' = 'completed';
+      if (upid) {
+        try { await waitForTask(cluster as never, key, a.node, upid, { timeoutMs: 120000 }); }
+        catch (e) { task = String((e as Error).message).includes('timed out') ? 'running' : 'failed'; }
+      }
+      await audit(db, u.id, 'proxmox.snapshot.created', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, snap: b.name });
+      return c.json({ data: { upid, task } }, task === 'failed' ? 502 : 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.post('/vms/:id/snapshots/:snap/rollback', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a, u } = loaded;
+    const snap = c.req.param('snap') || '';
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const res = await rollbackSnapshot(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, snap);
+      const upid = (res as { data?: string }).data || '';
+      let task: 'completed' | 'running' | 'failed' = 'completed';
+      if (upid) {
+        try { await waitForTask(cluster as never, key, a.node, upid, { timeoutMs: 180000 }); }
+        catch (e) { task = String((e as Error).message).includes('timed out') ? 'running' : 'failed'; }
+      }
+      await audit(db, u.id, 'proxmox.snapshot.rolledback', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, snap });
+      return c.json({ data: { upid, task } }, task === 'failed' ? 502 : 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.delete('/vms/:id/snapshots/:snap', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a, u } = loaded;
+    const snap = c.req.param('snap') || '';
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const res = await deleteSnapshot(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, snap);
+      const upid = (res as { data?: string }).data || '';
+      let task: 'completed' | 'running' | 'failed' = 'completed';
+      if (upid) {
+        try { await waitForTask(cluster as never, key, a.node, upid, { timeoutMs: 60000 }); }
+        catch (e) { task = String((e as Error).message).includes('timed out') ? 'running' : 'failed'; }
+      }
+      await audit(db, u.id, 'proxmox.snapshot.deleted', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, snap });
+      return c.json({ data: { upid, task } }, task === 'failed' ? 502 : 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+
+  // ── Backups (vzdump) ──
+
+  app.get('/vms/:id/backups', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const storage = (c.req.query('storage') as string) || 'local';
+    try {
+      const items = await listBackups(cluster as never, key, a.node, storage, a.vmid);
+      return c.json({ data: items });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.post('/vms/:id/backups', requireAuth, zJson(z.object({ storage: z.string().min(1).max(191).default('local'), mode: z.enum(['snapshot', 'suspend', 'stop']).default('snapshot'), notes: z.string().max(500).optional() })), async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a, u } = loaded;
+    const b = c.req.valid('json' as never) as { storage: string; mode: 'snapshot' | 'suspend' | 'stop'; notes?: string };
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const res = await createBackup(cluster as never, key, a.node, { vmid: a.vmid, storage: b.storage, mode: b.mode, notes: b.notes || `LunixPanel backup of VM ${a.vmid}` });
+      const upid = (res as { data?: string }).data || '';
+      await audit(db, u.id, 'proxmox.backup.created', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, storage: b.storage });
+      return c.json({ data: { upid } }, 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.post('/vms/:id/backups/restore', requireAdmin, zJson(z.object({ archive: z.string().min(1).max(512), storage: z.string().min(1).max(191).optional() })), async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const b = c.req.valid('json' as never) as { archive: string; storage?: string };
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      // Stop first — vzdump restore requires the target to be stopped.
+      try {
+        const stopRes = await vmAction(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, 'stop');
+        const stopUpid = (stopRes as { data?: string }).data;
+        if (stopUpid) await waitForTask(cluster as never, key, a.node, stopUpid, { timeoutMs: 120000 });
+      } catch { /* already stopped */ }
+      const res = a.type === 'qemu'
+        ? await restoreQemu(cluster as never, key, a.node, { vmid: a.vmid, archive: b.archive, storage: b.storage || 'local-lvm' })
+        : await restoreLxc(cluster as never, key, a.node, { vmid: a.vmid, archive: b.archive, storage: b.storage || 'local-lvm' });
+      const upid = (res as { data?: string }).data || '';
+      let task: 'completed' | 'running' | 'failed' = 'completed';
+      if (upid) {
+        try { await waitForTask(cluster as never, key, a.node, upid, { timeoutMs: 300000 }); }
+        catch (e) { task = String((e as Error).message).includes('timed out') ? 'running' : 'failed'; }
+      }
+      await audit(db, a.userId, 'proxmox.backup.restored', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, archive: b.archive });
+      return c.json({ data: { upid, task } }, task === 'failed' ? 502 : 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+
+  // ── Rebuild (admin): destroy + recreate from template with same vmid/specs/IP ──
+
+  app.post('/vms/:id/rebuild', requireAdmin, zJson(z.object({ templateId: z.number().int().optional(), preserveDisk: z.boolean().optional() })), async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const b = c.req.valid('json' as never) as { templateId?: number; preserveDisk?: boolean };
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    const tmpl = b.templateId
+      ? (await db.select().from(schema.proxmoxTemplates).where(eq(schema.proxmoxTemplates.id, b.templateId)).limit(1))[0]
+      : undefined;
+    if (b.templateId && !tmpl) return c.json({ errors: [{ code: 'not_found', detail: 'Template not found' }] }, 404);
+    if (tmpl && tmpl.type !== a.type) return c.json({ errors: [{ code: 'validation', detail: `Template type (${tmpl.type}) must match VM type (${a.type})` }] }, 422);
+    try {
+      // Capture current config so specs and network survive the rebuild.
+      const cfg = await getVmConfig(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid);
+      const cores = Number(cfg.cores) || tmpl?.defaultCores || 1;
+      const memory = Number(cfg.memory) || tmpl?.defaultMemory || 512;
+      const net0 = String(cfg.net0 || '');
+      const bridgeMatch = net0.match(/bridge=([^,]+)/);
+      const tagMatch = net0.match(/tag=([^,]+)/);
+      const ipconfig0 = String(cfg.ipconfig0 || '');
+      const ipMatch = ipconfig0.match(/ip=([^,]+)/);
+      const gwMatch = ipconfig0.match(/gw=([^,]+)/);
+      const hostname = String(cfg.name || cfg.hostname || `vm${a.vmid}`);
+      const storage = tmpl?.storage || 'local-lvm';
+      const diskGB = tmpl?.defaultDisk || 20;
+
+      // Stop then destroy.
+      try {
+        const st = await vmAction(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, 'stop');
+        const stopUpid = (st as { data?: string }).data;
+        if (stopUpid) await waitForTask(cluster as never, key, a.node, stopUpid, { timeoutMs: 120000 });
+      } catch { /* already stopped */ }
+      const delRes = await deleteVm(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, { destroyUnreferenced: true });
+      const delUpid = (delRes as { data?: string }).data;
+      if (delUpid) await waitForTask(cluster as never, key, a.node, delUpid, { timeoutMs: 180000 });
+
+      // Recreate with same vmid.
+      const params: Record<string, string | number> = { vmid: a.vmid, cores, memory };
+      if (a.type === 'qemu') {
+        params.name = hostname;
+        params['scsi0'] = `${storage}:${diskGB}`;
+        params.net0 = `virtio,bridge=${bridgeMatch?.[1] || 'vmbr0'}${tagMatch ? `,tag=${tagMatch[1]}` : ''}`;
+        params.ipconfig0 = ipMatch ? `ip=${ipMatch[1]}${gwMatch ? `,gw=${gwMatch[1]}` : ''}` : 'ip=dhcp';
+        params['ide0'] = `${storage}:cloudinit`;
+        params.agent = 'enabled=1';
+        if (tmpl?.iso) params.ide2 = `${tmpl.iso},media=cdrom`;
+      } else {
+        params.hostname = hostname;
+        params.rootfs = `${storage}:${diskGB}`;
+        params.net0 = `name=eth0,bridge=${bridgeMatch?.[1] || 'vmbr0'}${tagMatch ? `,tag=${tagMatch[1]}` : ''}${ipMatch && ipMatch[1] !== 'dhcp' ? `,ip=${ipMatch[1]}${gwMatch ? `,gw=${gwMatch[1]}` : ''}` : ',ip=dhcp'}`;
+        params.unprivileged = 1;
+        if (tmpl?.ostemplate) params.ostemplate = tmpl.ostemplate;
+      }
+      const createRes = a.type === 'qemu'
+        ? await createQemu(cluster as never, key, a.node, params)
+        : await createLxc(cluster as never, key, a.node, params);
+      const createUpid = (createRes as { data?: string }).data || '';
+      let task: 'completed' | 'running' | 'failed' = 'completed';
+      if (createUpid) {
+        try { await waitForTask(cluster as never, key, a.node, createUpid, { timeoutMs: 300000 }); }
+        catch (e) { task = String((e as Error).message).includes('timed out') ? 'running' : 'failed'; }
+      }
+      const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
+      await audit(db, admin.id, 'proxmox.vm.rebuilt', 'proxmox_vm', String(a.id), auditIp(c), { vmid: a.vmid, templateId: b.templateId ?? null });
+      return c.json({ data: { upid: createUpid, task } }, task === 'failed' ? 502 : 202);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+
+  // ── Resource stats (rrddata graphs) + task status ──
+
+  app.get('/vms/:id/stats', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    const timeframeParam = (c.req.query('timeframe') as string) || 'hour';
+    const timeframe = (['hour', 'day', 'week', 'month', 'year'].includes(timeframeParam) ? timeframeParam : 'hour') as 'hour' | 'day' | 'week' | 'month' | 'year';
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    try {
+      const rrd = await getVmRrdData(cluster as never, key, a.node, a.type as 'qemu' | 'lxc', a.vmid, timeframe);
+      return c.json({ data: rrd });
+    } catch (e) {
+      return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
+    }
+  });
+  app.get('/tasks/:node/:upid', requireAdmin, async (c) => {
+    const node = c.req.param('node') || '';
+    const upid = c.req.param('upid') || '';
+    const key = process.env.ENCRYPTION_KEY!;
+    const clusterRows = await db.select().from(schema.proxmoxClusters);
+    for (const cluster of clusterRows) {
+      try {
+        const st = await getTaskStatus(cluster as never, key, node, upid);
+        return c.json({ data: st });
+      } catch { /* try next cluster */ }
+    }
+    return c.json({ errors: [{ code: 'not_found', detail: 'Task not found on any cluster' }] }, 404);
   });
   return app;
 }

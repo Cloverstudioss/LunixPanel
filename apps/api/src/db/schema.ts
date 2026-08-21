@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, boolean, timestamp, integer, jsonb, index, uuid, bigint } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, text, boolean, timestamp, integer, jsonb, index, uuid, bigint, uniqueIndex } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -68,7 +68,7 @@ export const allocations = pgTable('allocations', {
   ipAlias: varchar('ip_alias', { length: 45 }),
   port: integer('port').notNull(),
   serverId: integer('server_id'),
-}, (t) => [index('alloc_node_idx').on(t.nodeId)]);
+}, (t) => [index('alloc_node_idx').on(t.nodeId), uniqueIndex('alloc_node_ip_port_uq').on(t.nodeId, t.ip, t.port)]);
 
 export const nests = pgTable('nests', {
   id: serial('id').primaryKey(),
@@ -122,6 +122,7 @@ export const servers = pgTable('servers', {
   allocationId: integer('allocation_id').notNull().references(() => allocations.id),
   allocationLimit: integer('allocation_limit').notNull().default(1),
   backupLimit: integer('backup_limit').notNull().default(0),
+  databaseLimit: integer('database_limit').notNull().default(0),
   memory: integer('memory').notNull().default(512),
   swap: integer('swap').notNull().default(0),
   disk: integer('disk').notNull().default(10240),
@@ -186,6 +187,10 @@ export const proxmoxVmAssignments = pgTable('proxmox_vm_assignments', {
   type: varchar('type', { length: 10 }).notNull(),
   vmid: integer('vmid').notNull(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  graceUntil: timestamp('grace_until', { withTimezone: true }),
+  suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+  suspendedReason: varchar('suspended_reason', { length: 255 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pve_assign_cluster_node_vmid_idx').on(t.clusterId, t.node, t.vmid)]);
 
@@ -243,3 +248,45 @@ export const auditLogs = pgTable('audit_logs', {
   meta: jsonb('meta').$type<Record<string, unknown>>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const schedules = pgTable('schedules', {
+  id: serial('id').primaryKey(),
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 191 }).notNull(),
+  cron: varchar('cron', { length: 64 }).notNull(),
+  active: boolean('active').notNull().default(true),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+  nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('schedules_server_idx').on(t.serverId), index('schedules_next_run_idx').on(t.nextRunAt)]);
+
+export const scheduleTasks = pgTable('schedule_tasks', {
+  id: serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').notNull().references(() => schedules.id, { onDelete: 'cascade' }),
+  sequenceId: integer('sequence_id').notNull().default(0),
+  action: varchar('action', { length: 20 }).notNull(),
+  payload: text('payload'),
+  timeOffsetSeconds: integer('time_offset_seconds').notNull().default(0),
+}, (t) => [index('schedule_tasks_schedule_idx').on(t.scheduleId)]);
+
+export const databaseHosts = pgTable('database_hosts', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 191 }).notNull(),
+  host: varchar('host', { length: 191 }).notNull(),
+  port: integer('port').notNull().default(3306),
+  username: varchar('username', { length: 64 }).notNull(),
+  passwordEncrypted: text('password_encrypted').notNull(),
+  maxDatabases: integer('max_databases').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const databases = pgTable('databases', {
+  id: serial('id').primaryKey(),
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  databaseHostId: integer('database_host_id').notNull().references(() => databaseHosts.id, { onDelete: 'cascade' }),
+  databaseName: varchar('database_name', { length: 64 }).notNull().unique(),
+  username: varchar('username', { length: 64 }).notNull(),
+  passwordEncrypted: text('password_encrypted').notNull(),
+  remote: varchar('remote', { length: 64 }).notNull().default('%'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('databases_server_idx').on(t.serverId)]);

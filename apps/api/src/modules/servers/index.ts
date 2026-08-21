@@ -7,10 +7,12 @@ import * as schema from '../../db/schema.js';
 import type { Db } from '../../db/index.js';
 import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 import { signJwt } from '../../lib/jwt.js';
+import { wingsUrl, createServer as wingsCreateServer, syncServer as wingsSync, deleteServer as wingsDelete, setServerPower, sendServerCommand, getServerLogs, triggerInstall, WingsError } from '../../lib/wings-client.js';
 
 function zJson<T extends z.ZodTypeAny>(s: T) { return validator('json', (v, c) => { const r = s.safeParse(v); if (!r.success) return c.json({ errors: [{ code: 'validation', detail: r.error.message }] }, 422); return r.data as z.infer<T>; }); }
 
 type AuthedUser = { id: number; uuid: string; email: string; username: string; isAdmin: boolean };
+type ServerRow = typeof schema.servers.$inferSelect;
 
 export default function serverRoutes(db: Db) {
   const app = new Hono();
@@ -27,34 +29,115 @@ export default function serverRoutes(db: Db) {
     const rows = await db.select().from(schema.nodes).where(eq(schema.nodes.id, server.nodeId)).limit(1);
     return rows[0] || null;
   }
-  function wingsUrl(n: { scheme: string; fqdn: string; daemonListen: number }) { return `${n.scheme}://${n.fqdn}:${n.daemonListen}`; }
-  async function registerOnWings(s: typeof schema.servers.$inferSelect): Promise<string | null> {
-    const nodes = await db.select().from(schema.nodes).where(eq(schema.nodes.id, s.nodeId)).limit(1);
-    const node = nodes[0];
+  // Build the full Pterodactyl-shaped wings server payload (mirrors remote serverConfig).
+  async function buildWingsServerPayload(s: ServerRow): Promise<Record<string, unknown>> {
+    const alloc = (await db.select().from(schema.allocations).where(eq(schema.allocations.id, s.allocationId)).limit(1))[0];
+    const egg = (await db.select().from(schema.eggs).where(eq(schema.eggs.id, s.eggId)).limit(1))[0];
+    const eggVars = egg ? await db.select().from(schema.eggVariables).where(eq(schema.eggVariables.eggId, egg.id)) : [];
+    const sVars = await db.select().from(schema.serverVariables).where(eq(schema.serverVariables.serverId, s.id));
+    const node = (await db.select().from(schema.nodes).where(eq(schema.nodes.id, s.nodeId)).limit(1))[0];
+    const loc = node?.locationId ? (await db.select().from(schema.locations).where(eq(schema.locations.id, node.locationId)).limit(1))[0] : null;
+    const environment: Record<string, string> = {};
+    for (const ev of eggVars) {
+      const sv = sVars.find((v) => v.variableId === ev.id);
+      environment[ev.envVariable] = sv?.variableValue ?? ev.defaultValue;
+    }
+    environment['STARTUP'] = s.startup;
+    environment['P_SERVER_UUID'] = s.uuid;
+    environment['P_SERVER_LOCATION'] = loc?.short || 'global';
+    environment['P_SERVER_ALLOCATION_LIMIT'] = String(s.allocationLimit);
+    environment['P_SERVER_BACKUP_LIMIT'] = String(s.backupLimit);
+    const cfg = (egg?.config ?? {}) as Record<string, unknown>;
+    const getCfg = (key: string): Record<string, unknown> => {
+      const v = cfg[key];
+      if (v === undefined || v === null) return {};
+      if (typeof v === 'string') { try { return JSON.parse(v); } catch { return {}; } }
+      return typeof v === 'object' ? (v as Record<string, unknown>) : {};
+    };
+    const configs: unknown[] = [];
+    for (const [file, data] of Object.entries(getCfg('files'))) {
+      if (!data || typeof data !== 'object') continue;
+      const d = data as Record<string, unknown>;
+      const find = (d.find && typeof d.find === 'object' ? d.find : {}) as Record<string, unknown>;
+      const replace: unknown[] = [];
+      for (const [match, rv] of Object.entries(find)) {
+        if (rv && typeof rv === 'object') {
+          for (const [ifValue, replaceWith] of Object.entries(rv as Record<string, unknown>)) {
+            replace.push({ match, if_value: ifValue, replace_with: String(replaceWith) });
+          }
+        } else {
+          replace.push({ match, replace_with: String(rv) });
+        }
+      }
+      configs.push({ file, parser: d.parser ?? 'properties', replace });
+    }
+    const startupCfg = getCfg('startup');
+    const done = startupCfg.done !== undefined ? (Array.isArray(startupCfg.done) ? startupCfg.done : [String(startupCfg.done)]) : [];
+    const stopRaw = cfg.stop !== undefined ? String(cfg.stop) : 'stop';
+    const stop = stopRaw.startsWith('^') ? { type: 'signal', value: stopRaw.slice(1).toUpperCase() } : { type: 'command', value: stopRaw };
+    return {
+      uuid: s.uuid,
+      start_on_completion: false,
+      settings: {
+        uuid: s.uuid,
+        meta: { name: s.name, description: s.description ?? '' },
+        suspended: s.status === 'suspended',
+        invocation: s.startup,
+        skip_egg_scripts: false,
+        environment,
+        labels: {},
+        allocations: {
+          force_outgoing_ip: false,
+          default: { ip: alloc?.ip ?? '0.0.0.0', port: alloc?.port ?? 0 },
+          mappings: alloc ? { [alloc.ip]: [alloc.port] } : {},
+        },
+        build: {
+          memory_limit: s.memory, swap: s.swap, io_weight: s.io, cpu_limit: s.cpu,
+          disk_space: s.disk, threads: s.threads ?? null, oom_disabled: s.oomDisabled,
+        },
+        crash_detection_enabled: true,
+        mounts: [{ target: '/home/container', source: `${node?.daemonBase ?? '/var/lib/pterodactyl/volumes'}/${s.uuid}`, read_only: false }],
+        egg: { id: egg?.uuid ?? '', file_denylist: [] as string[] },
+        container: { image: s.image },
+      },
+      process_configuration: {
+        startup: { done, user_interaction: [], strip_ansi: true },
+        stop,
+        configs,
+      },
+    };
+  }
+  async function registerOnWings(s: ServerRow): Promise<string | null> {
+    const node = await nodeFor(s);
     if (!node) return 'no node';
     try {
-      const r = await fetch(`${wingsUrl(node)}/api/servers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ uuid: s.uuid, start_on_completion: false }) });
-      if (!r.ok) return `wings create failed (${r.status})`;
+      await wingsCreateServer(node, await buildWingsServerPayload(s));
       return null;
     } catch (e) {
-      return `wings unreachable (${String((e as Error).message)})`;
+      return e instanceof WingsError ? `wings error: ${e.message}` : `wings unreachable (${String((e as Error).message)})`;
     }
   }
-  async function syncToWings(s: typeof schema.servers.$inferSelect): Promise<void> {
-    const nodes = await db.select().from(schema.nodes).where(eq(schema.nodes.id, s.nodeId)).limit(1);
-    const node = nodes[0];
+  async function syncToWings(s: ServerRow): Promise<void> {
+    const node = await nodeFor(s);
     if (!node) return;
-    try {
-      await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/sync`, { method: 'POST', headers: { Authorization: `Bearer ${node.daemonToken}` } });
-    } catch { /* non-fatal */ }
+    try { await wingsSync(node, s.uuid); } catch { /* non-fatal */ }
   }
-  async function deleteFromWings(s: typeof schema.servers.$inferSelect): Promise<void> {
-    const nodes = await db.select().from(schema.nodes).where(eq(schema.nodes.id, s.nodeId)).limit(1);
-    const node = nodes[0];
+  async function deleteFromWings(s: ServerRow): Promise<void> {
+    const node = await nodeFor(s);
     if (!node) return;
-    try {
-      await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}`, { method: 'DELETE', headers: { Authorization: `Bearer ${node.daemonToken}` } });
-    } catch { /* non-fatal */ }
+    try { await wingsDelete(node, s.uuid); } catch { /* non-fatal */ }
+  }
+  // Suspension must actually reach the daemon: stop the container and push the suspended config.
+  async function suspendOnWings(s: ServerRow): Promise<void> {
+    const node = await nodeFor(s);
+    if (!node) return;
+    try { await setServerPower(node, s.uuid, 'stop', 10); } catch { /* container may already be stopped */ }
+    try { await wingsSync(node, s.uuid); } catch { /* non-fatal */ }
+  }
+  async function unsuspendOnWings(s: ServerRow): Promise<void> {
+    const node = await nodeFor(s);
+    if (!node) return;
+    try { await wingsSync(node, s.uuid); } catch { /* non-fatal */ }
   }
   app.get('/', requireAuth, async (c) => {
     const u = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
@@ -83,7 +166,7 @@ export default function serverRoutes(db: Db) {
     const uuidShort = Math.random().toString(36).slice(2, 10);
     const expiresAt = b.expires_at ? new Date(b.expires_at) : null;
     const [row] = await db.insert(schema.servers).values({
-      uuidShort, name: b.name.trim(), userId: b.userId, nodeId: b.nodeId, eggId: b.eggId, allocationId: b.allocationId, allocationLimit: b.allocationLimit, backupLimit: b.backupLimit, memory: b.memory, swap: b.swap, disk: b.disk, io: b.io, cpu: b.cpu, threads: b.threads ?? null, oomDisabled: b.oom_disabled ?? false, description: b.description ?? null, image: b.image, startup: b.startup, expiresAt, status: 'active',
+      uuidShort, name: b.name.trim(), userId: b.userId, nodeId: b.nodeId, eggId: b.eggId, allocationId: b.allocationId, allocationLimit: b.allocationLimit, backupLimit: b.backupLimit, memory: b.memory, swap: b.swap, disk: b.disk, io: b.io, cpu: b.cpu, threads: b.threads ?? null, oomDisabled: b.oom_disabled ?? false, description: b.description ?? null, image: b.image, startup: b.startup, expiresAt, status: 'installing',
     }).returning();
     await db.update(schema.allocations).set({ serverId: row.id }).where(eq(schema.allocations.id, b.allocationId));
     const vars = await db.select().from(schema.eggVariables).where(eq(schema.eggVariables.eggId, b.eggId));
@@ -204,11 +287,16 @@ export default function serverRoutes(db: Db) {
     const auth = await requireOwner(c as never, s);
     if ('res' in auth) return auth.res;
     const u = auth.user;
+    if (s.status === 'suspended') return c.json({ errors: [{ code: 'suspended', detail: 'Server is suspended.' }] }, 409);
     const node = await nodeFor(s);
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
     const b = c.req.valid('json' as never) as { action: string };
-    const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/power`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ action: b.action, wait_seconds: 30 }) });
-    if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+    try {
+      await setServerPower(node, s.uuid, b.action as 'start' | 'stop' | 'restart' | 'kill');
+    } catch (e) {
+      const detail = e instanceof WingsError ? e.message : `Wings unreachable (${String((e as Error).message)})`;
+      return c.json({ errors: [{ code: 'wings_error', detail }] }, 502);
+    }
     await db.insert(schema.auditLogs).values({ userId: u.id, action: `server.power.${b.action}`, targetType: 'server', targetId: String(id) });
     return c.json({ data: { ok: true } }, 202);
   });
@@ -222,8 +310,12 @@ export default function serverRoutes(db: Db) {
     const node = await nodeFor(s);
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
     const b = c.req.valid('json' as never) as { command: string };
-    const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/commands`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ commands: [b.command] }) });
-    if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+    try {
+      await sendServerCommand(node, s.uuid, b.command);
+    } catch (e) {
+      const detail = e instanceof WingsError ? e.message : `Wings unreachable (${String((e as Error).message)})`;
+      return c.json({ errors: [{ code: 'wings_error', detail }] }, 502);
+    }
     return c.json({ data: { ok: true } });
   });
   app.get('/:id/logs', requireAuth, async (c) => {
@@ -235,12 +327,11 @@ export default function serverRoutes(db: Db) {
     const node = await nodeFor(s);
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
     try {
-      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/logs`, { headers: { Authorization: `Bearer ${node.daemonToken}` } });
-      if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
-      const j = await r.json().catch(() => ({ data: [] }));
-      return c.json({ data: j.data || [] });
+      const logs = await getServerLogs(node, s.uuid);
+      return c.json({ data: logs });
     } catch (e) {
-      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+      const detail = e instanceof WingsError ? e.message : `Wings unreachable (${String((e as Error).message)})`;
+      return c.json({ errors: [{ code: 'wings_error', detail }] }, 502);
     }
   });
   const fileProxy = (name: string) => async (c: any) => {
@@ -264,24 +355,15 @@ export default function serverRoutes(db: Db) {
     } else if (name === 'download') {
       url += `/contents?file=${encodeURIComponent((c.req.query('file') as string) || '')}&download=1`;
     } else if (name === 'write') {
-      const qFile = (c.req.query('file') as string) || '';
-      let raw = await c.req.text().catch(() => '');
-      let file = qFile;
-      if (!file) {
-        try {
-          const j = JSON.parse(raw);
-          if (j && typeof j === 'object' && !Array.isArray(j) && 'file' in j) {
-            const root = String(j.root || '/');
-            const fname = String(j.file || '');
-            file = `/${[root, fname].join('/').replace(/\/+/g, '/').replace(/^\/+/, '')}`;
-            raw = String(j.content ?? '');
-          }
-        } catch { /* raw body is the file content */ }
-      } else {
-        try { const p = JSON.parse(raw); if (typeof p === 'string') raw = p; } catch { /* keep raw */ }
+      // JSON body only: { root, file, content }
+      const parsed = await c.req.json().catch(() => null) as { root?: string; file?: string; content?: string } | null;
+      if (!parsed || typeof parsed.file !== 'string' || typeof parsed.content !== 'string') {
+        return c.json({ errors: [{ code: 'validation', detail: 'Expected JSON body { root, file, content }' }] }, 422);
       }
+      const root = String(parsed.root || '/');
+      const file = `/${[root, parsed.file].join('/').replace(/\/+/g, '/').replace(/^\/+/, '')}`;
       url += `/write?file=${encodeURIComponent(file)}`;
-      body = raw;
+      body = parsed.content;
       headers['Content-Type'] = 'application/octet-stream';
     } else {
       url += `/${name}`;
@@ -427,9 +509,9 @@ export default function serverRoutes(db: Db) {
     const free = all.filter((a) => !a.serverId);
     const limit = s.allocationLimit;
     const canAdd = limit === 0 || mine.length < limit;
-    return c.json({ data: { primary_id: s.allocationId, assigned: mine, limit, can_add: canAdd, free_count: free.length } });
+    return c.json({ data: { primary_id: s.allocationId, assigned: mine, limit, can_add: canAdd, free_count: free.length, free: free.slice(0, 200).map((f) => ({ id: f.id, ip: f.ip, port: f.port, ipAlias: f.ipAlias })) } });
   });
-  app.post('/:id/allocations', requireAuth, async (c) => {
+  app.post('/:id/allocations', requireAuth, zJson(z.object({ allocationId: z.number().int().optional() })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
     const s = await loadServer(id);
     if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
@@ -437,12 +519,19 @@ export default function serverRoutes(db: Db) {
     if ('res' in auth) return auth.res;
     const node = await nodeFor(s);
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    const b = c.req.valid('json' as never) as { allocationId?: number };
     const all = await db.select().from(schema.allocations).where(eq(schema.allocations.nodeId, node.id));
     const mine = all.filter((a) => a.serverId === id);
     const free = all.filter((a) => !a.serverId);
     if (s.allocationLimit !== 0 && mine.length >= s.allocationLimit) return c.json({ errors: [{ code: 'limit', detail: `Allocation limit reached (${s.allocationLimit}).` }] }, 409);
     if (free.length === 0) return c.json({ errors: [{ code: 'no_free', detail: 'No free allocations on this node.' }] }, 409);
-    const pick = free[Math.floor(Math.random() * free.length)];
+    // Explicit port choice; falls back to first free for older clients.
+    let pick = free[0];
+    if (b.allocationId) {
+      const chosen = free.find((a) => a.id === b.allocationId);
+      if (!chosen) return c.json({ errors: [{ code: 'validation', detail: 'Selected allocation is not free on this node.' }] }, 422);
+      pick = chosen;
+    }
     await db.update(schema.allocations).set({ serverId: id }).where(eq(schema.allocations.id, pick.id));
     await syncToWings(s);
     return c.json({ data: { ok: true, allocation: { id: pick.id, ip: pick.ip, port: pick.port, alias: pick.ipAlias } } }, 201);
@@ -492,7 +581,44 @@ export default function serverRoutes(db: Db) {
     }
     const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await db.insert(schema.auditLogs).values({ userId: me.id, action: 'server.variables.updated', targetType: 'server', targetId: String(id) });
+    await syncToWings(s);
     return c.json({ data: { ok: true } });
+  });
+  app.get('/:id/sftp', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    return c.json({ data: { address: node.fqdn, port: 2022, user: `user.${s.uuidShort}`, connection: `sftp://user.${s.uuidShort}@${node.fqdn}:2022` } });
+  });
+  app.post('/:id/files/upload', requireAuth, async (c) => {
+    const id = parseInt(c.req.param('id') || '0', 10);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const auth = await requireOwner(c as never, s);
+    if ('res' in auth) return auth.res;
+    const node = await nodeFor(s);
+    if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
+    // Stream the raw body straight to wings' upload endpoint (target dir via query param).
+    const directory = (c.req.query('directory') || '/').replace(/\/+$/, '') || '/';
+    try {
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/files/upload?directory=${encodeURIComponent(directory)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${node.daemonToken}`, 'Content-Type': c.req.header('Content-Type') || 'application/octet-stream' },
+        body: c.req.raw.body ? await c.req.arrayBuffer() : undefined,
+        signal: AbortSignal.timeout(120000),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => null) as { errors?: { detail?: string }[] } | null;
+        return c.json({ errors: [{ code: 'wings_error', detail: j?.errors?.[0]?.detail || `Wings returned ${r.status}` }] }, 502);
+      }
+      return c.json({ data: { ok: true } }, 201);
+    } catch (e) {
+      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+    }
   });
   app.post('/:id/reinstall', requireAuth, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
@@ -504,10 +630,11 @@ export default function serverRoutes(db: Db) {
     if (!node) return c.json({ errors: [{ code: 'not_found', detail: 'Node not found' }] }, 404);
     await db.update(schema.servers).set({ status: 'installing' }).where(eq(schema.servers.id, id));
     try {
-      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/install`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${node.daemonToken}` }, body: JSON.stringify({ reinstall: true }) });
-      if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
+      await triggerInstall(node, s.uuid, true);
     } catch (e) {
-      return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
+      await db.update(schema.servers).set({ status: s.status }).where(eq(schema.servers.id, id));
+      const detail = e instanceof WingsError ? e.message : `Wings unreachable (${String((e as Error).message)})`;
+      return c.json({ errors: [{ code: 'wings_error', detail }] }, 502);
     }
     const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await db.insert(schema.auditLogs).values({ userId: me.id, action: 'server.reinstalled', targetType: 'server', targetId: String(id) });
@@ -527,7 +654,7 @@ export default function serverRoutes(db: Db) {
       ? '#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n'
       : '#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=false\n';
     try {
-      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/files/write?file=${encodeURIComponent('eula.txt')}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${node.daemonToken}` }, body: content });
+      const r = await fetch(`${wingsUrl(node)}/api/servers/${s.uuid}/files/write?file=${encodeURIComponent('eula.txt')}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${node.daemonToken}` }, body: content, signal: AbortSignal.timeout(15000) });
       if (!r.ok) return c.json({ errors: [{ code: 'wings_error', detail: `Wings returned ${r.status}` }] }, 502);
     } catch (e) {
       return c.json({ errors: [{ code: 'wings_error', detail: `Wings unreachable (${String((e as Error).message)})` }] }, 502);
@@ -568,6 +695,7 @@ export default function serverRoutes(db: Db) {
       if (sv) await db.update(schema.serverVariables).set({ variableValue: val }).where(eq(schema.serverVariables.id, sv.id));
       else await db.insert(schema.serverVariables).values({ serverId: s.id, variableId: ev.id, variableValue: val });
     }
+    await syncToWings(s);
     return c.json({ data: { ok: true } });
   });
   app.patch('/:id/settings', requireAuth, zJson(z.object({ name: z.string().min(1).max(191).optional(), description: z.string().max(1000).nullable().optional(), image: z.string().min(1).max(512).optional(), startup: z.string().max(2048).optional(), banner: z.string().max(2048).nullable().optional() })), async (c) => {
@@ -590,20 +718,25 @@ export default function serverRoutes(db: Db) {
     }
     if (Object.keys(update).length === 0) return c.json({ errors: [{ code: 'validation', detail: 'No fields to update' }] }, 422);
     const [row] = await db.update(schema.servers).set(update).where(eq(schema.servers.id, id)).returning();
+    await syncToWings(row);
     return c.json({ data: row });
   });
   app.post('/:id/suspend', requireAdmin, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const [r] = await db.update(schema.servers).set({ status: 'suspended' }).where(eq(schema.servers.id, id)).returning();
-    if (!r) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const [r] = await db.update(schema.servers).set({ status: 'suspended', suspendedAt: new Date(), suspendedReason: 'manual' }).where(eq(schema.servers.id, id)).returning();
+    await suspendOnWings(r);
     const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await db.insert(schema.auditLogs).values({ userId: me.id, action: 'server.suspended', targetType: 'server', targetId: String(id) });
     return c.json({ data: r });
   });
   app.post('/:id/unsuspend', requireAdmin, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const [r] = await db.update(schema.servers).set({ status: 'active' }).where(eq(schema.servers.id, id)).returning();
-    if (!r) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const s = await loadServer(id);
+    if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
+    const [r] = await db.update(schema.servers).set({ status: 'active', suspendedAt: null, suspendedReason: null }).where(eq(schema.servers.id, id)).returning();
+    await unsuspendOnWings(r);
     const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await db.insert(schema.auditLogs).values({ userId: me.id, action: 'server.unsuspended', targetType: 'server', targetId: String(id) });
     return c.json({ data: r });
@@ -614,7 +747,8 @@ export default function serverRoutes(db: Db) {
     const s = rows[0];
     if (!s) return c.json({ errors: [{ code: 'not_found', detail: 'Server not found' }] }, 404);
     await deleteFromWings(s);
-    await db.update(schema.allocations).set({ serverId: null }).where(eq(schema.allocations.id, s.allocationId));
+    // Release every allocation held by this server (primary + secondaries).
+    await db.update(schema.allocations).set({ serverId: null }).where(eq(schema.allocations.serverId, id));
     await db.delete(schema.serverVariables).where(eq(schema.serverVariables.serverId, id));
     const [deleted] = await db.delete(schema.servers).where(eq(schema.servers.id, id)).returning();
     const me = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
