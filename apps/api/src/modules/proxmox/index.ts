@@ -6,8 +6,8 @@ import * as schema from '../../db/schema.js';
 import type { Db } from '../../db/index.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { encrypt } from '../../lib/crypto.js';
-import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces, deleteVm, renameVm, waitForTask, listSnapshots, createSnapshot, rollbackSnapshot, deleteSnapshot, createBackup, listBackups, restoreQemu, restoreLxc, getVmRrdData, getTaskStatus } from '../../lib/proxmox-client.js';
+import { encrypt, decrypt, randomToken } from '../../lib/crypto.js';
+import { listNodes, listVms, vmAction, getVmStatus, getVmConfig, vncProxy, createQemu, createLxc, listStorages, listStorageContent, listNetworkInterfaces, deleteVm, renameVm, waitForTask, listSnapshots, createSnapshot, rollbackSnapshot, deleteSnapshot, createBackup, listBackups, restoreQemu, restoreLxc, getVmRrdData, getTaskStatus, getGuestAgentInterfaces, listContainerInterfaces } from '../../lib/proxmox-client.js';
 import { audit, auditIp } from '../../lib/audit.js';
 
 const QEMU_ACTIONS = ['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume'];
@@ -440,26 +440,43 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'connection_failed', detail: `Cannot reach ${host} — ${(e as Error).message}` }] }, 422);
     }
   });
-  app.post('/assignments', requireAdmin, zJson(z.object({ clusterId: z.number().int(), node: z.string().min(1), type: z.enum(['qemu', 'lxc']), vmid: z.number().int(), userId: z.number().int(), expiresAt: z.string().datetime().nullable().optional() })), async (c) => {
-    const b = c.req.valid('json' as never) as { clusterId: number; node: string; type: 'qemu' | 'lxc'; vmid: number; userId: number; expiresAt?: string | null };
+  app.post('/assignments', requireAdmin, zJson(z.object({ clusterId: z.number().int(), node: z.string().min(1), type: z.enum(['qemu', 'lxc']), vmid: z.number().int(), userId: z.number().int(), expiresAt: z.string().datetime().nullable().optional(), sshUser: z.string().max(64).optional(), sshPassword: z.string().max(128).optional(), sshPort: z.number().int().min(1).max(65535).optional() })), async (c) => {
+    const b = c.req.valid('json' as never) as { clusterId: number; node: string; type: 'qemu' | 'lxc'; vmid: number; userId: number; expiresAt?: string | null; sshUser?: string; sshPassword?: string; sshPort?: number };
     const cluster = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, b.clusterId)).limit(1).then((r) => r[0]);
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
     const user = await db.select().from(schema.users).where(eq(schema.users.id, b.userId)).limit(1).then((r) => r[0]);
     if (!user) return c.json({ errors: [{ code: 'not_found', detail: 'User not found' }] }, 404);
     const existing = await db.select().from(schema.proxmoxVmAssignments).where(and(eq(schema.proxmoxVmAssignments.clusterId, b.clusterId), eq(schema.proxmoxVmAssignments.node, b.node), eq(schema.proxmoxVmAssignments.type, b.type), eq(schema.proxmoxVmAssignments.vmid, b.vmid))).limit(1);
     if (existing[0]) return c.json({ errors: [{ code: 'conflict', detail: 'VM already assigned' }] }, 409);
-    const [row] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning();
+    const key = process.env.ENCRYPTION_KEY;
+    const sshPassword = b.sshPassword || randomToken('ssh', 12).replace('ssh_', '');
+    if (!key || key.length < 64) return c.json({ errors: [{ code: 'config', detail: 'ENCRYPTION_KEY not set (64 hex chars)' }] }, 500);
+    const [row] = await db.insert(schema.proxmoxVmAssignments).values({
+      clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId,
+      expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
+      sshUser: b.sshUser || 'root', sshPort: b.sshPort ?? 22,
+      sshPasswordEncrypted: encrypt(sshPassword, key),
+    }).returning();
     const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await audit(db, admin.id, 'proxmox.assigned', 'proxmox_vm', String(row.id), auditIp(c), { clusterId: b.clusterId, node: b.node, type: b.type, vmid: b.vmid, userId: b.userId });
-    return c.json({ data: row }, 201);
+    return c.json({ data: { ...row, sshPasswordEncrypted: undefined, sshPassword } }, 201);
   });
-  app.patch('/assignments/:id', requireAdmin, zJson(z.object({ expiresAt: z.string().datetime().nullable().optional() })), async (c) => {
+  app.patch('/assignments/:id', requireAdmin, zJson(z.object({ expiresAt: z.string().datetime().nullable().optional(), sshUser: z.string().max(64).optional(), sshPassword: z.string().max(128).nullable().optional(), sshPort: z.number().int().min(1).max(65535).optional() })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const b = c.req.valid('json' as never) as { expiresAt?: string | null };
+    const b = c.req.valid('json' as never) as { expiresAt?: string | null; sshUser?: string; sshPassword?: string | null; sshPort?: number };
     const rows = await db.select().from(schema.proxmoxVmAssignments).where(eq(schema.proxmoxVmAssignments.id, id)).limit(1);
     if (!rows[0]) return c.json({ errors: [{ code: 'not_found', detail: 'Assignment not found' }] }, 404);
+    const key = process.env.ENCRYPTION_KEY;
+    if (!key || key.length < 64) return c.json({ errors: [{ code: 'config', detail: 'ENCRYPTION_KEY not set (64 hex chars)' }] }, 500);
     const update: Record<string, unknown> = {};
     if (b.expiresAt !== undefined) update.expiresAt = b.expiresAt ? new Date(b.expiresAt) : null;
+    let newPlainPassword: string | undefined;
+    if (b.sshUser !== undefined) update.sshUser = b.sshUser || 'root';
+    if (b.sshPort !== undefined) update.sshPort = b.sshPort;
+    if (b.sshPassword !== undefined) {
+      newPlainPassword = b.sshPassword || randomToken('ssh', 12).replace('ssh_', '');
+      update.sshPasswordEncrypted = encrypt(newPlainPassword, key);
+    }
     // Clearing expiry or moving it forward reactivates a suspended VPS.
     if (b.expiresAt === null || (b.expiresAt && new Date(b.expiresAt) > new Date())) {
       update.graceUntil = null;
@@ -469,7 +486,7 @@ export default function proxmoxRoutes(db: Db) {
     const [row] = await db.update(schema.proxmoxVmAssignments).set(update).where(eq(schema.proxmoxVmAssignments.id, id)).returning();
     const admin = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number };
     await audit(db, admin.id, 'proxmox.assignment.updated', 'proxmox_vm', String(id), auditIp(c), { fields: Object.keys(update) });
-    return c.json({ data: row });
+    return c.json({ data: { ...row, sshPasswordEncrypted: undefined, ...(newPlainPassword ? { sshPassword: newPlainPassword } : {}) } });
   });
   app.delete('/assignments/:id', requireAdmin, async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
@@ -504,9 +521,11 @@ export default function proxmoxRoutes(db: Db) {
     userId: z.number().int().optional(),
     ipPoolId: z.number().int().optional(),
     templateId: z.number().int().optional(),
+    sshUser: z.string().max(64).optional(),
+    sshPassword: z.string().max(128).optional(),
   })), async (c) => {
     const id = parseInt(c.req.param('id') || '0', 10);
-    const b = c.req.valid('json' as never) as { node: string; type: 'qemu' | 'lxc'; vmid?: number; hostname?: string; name?: string; cores?: number; sockets?: number; memory?: number; balloon?: number; disk?: number; storage?: string; bridge?: string; vlan?: number | null; ip?: string; gateway?: string; nameserver?: string; searchdomain?: string; iso?: string; ostemplate?: string; sshkeys?: string; userId?: number; ipPoolId?: number; templateId?: number };
+    const b = c.req.valid('json' as never) as { node: string; type: 'qemu' | 'lxc'; vmid?: number; hostname?: string; name?: string; cores?: number; sockets?: number; memory?: number; balloon?: number; disk?: number; storage?: string; bridge?: string; vlan?: number | null; ip?: string; gateway?: string; nameserver?: string; searchdomain?: string; iso?: string; ostemplate?: string; sshkeys?: string; userId?: number; ipPoolId?: number; templateId?: number; sshUser?: string; sshPassword?: string };
     const rows = await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, id)).limit(1);
     const cluster = rows[0];
     if (!cluster) return c.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
@@ -561,6 +580,9 @@ export default function proxmoxRoutes(db: Db) {
     if (b.type === 'qemu' && sockets) params.sockets = sockets;
     if (memory) params.memory = memory;
     if (balloon !== undefined) params.balloon = balloon;
+    let createdAssignmentId: number | undefined;
+    let createdSshPassword: string | undefined;
+    let createdSshUserOverride: string | undefined;
     const iso = b.iso || (tmpl ? tmpl.iso : undefined);
     const ostemplate = b.ostemplate || (tmpl ? tmpl.ostemplate : undefined);
     if (b.type === 'qemu') {
@@ -572,6 +594,11 @@ export default function proxmoxRoutes(db: Db) {
       // QEMU static networking is cloud-init based (net0 ip=/gw= is LXC-only syntax).
       params.ipconfig0 = ip !== 'dhcp' ? `ip=${ip}${gateway ? `,gw=${gateway}` : ''}` : 'ip=dhcp';
       params['ide0'] = `${storage}:cloudinit`;
+      // Cloud-init user/password so the panel-stored SSH creds actually work.
+      params.ciuser = b.sshUser || 'root';
+      const sshPassword = b.sshPassword || randomToken('ssh', 12).replace('ssh_', '');
+      params.cipassword = sshPassword;
+      createdSshPassword = sshPassword;
       if (b.nameserver) params.nameserver = b.nameserver;
       if (b.searchdomain) params.searchdomain = b.searchdomain;
       if (iso) params.ide2 = `${iso},media=cdrom`;
@@ -590,16 +617,29 @@ export default function proxmoxRoutes(db: Db) {
       if (ostemplate) params.ostemplate = ostemplate;
       if (b.nameserver) params.nameserver = b.nameserver;
       if (b.searchdomain) params.searchdomain = b.searchdomain;
-      if (b.sshkeys) params['ssh-public-keys'] = encodeURIComponent(b.sshkeys);
+      if (b.sshkeys && !b.sshPassword) params['ssh-public-keys'] = encodeURIComponent(b.sshkeys);
+      else if (!b.sshkeys) {
+        // LXC root password so panel SSH creds match the guest.
+        const lxcPassword = b.sshPassword || randomToken('ssh', 12).replace('ssh_', '');
+        params['password'] = encodeURIComponent(lxcPassword);
+        createdSshPassword = lxcPassword;
+      } else {
+        createdSshPassword = b.sshPassword || '';
+      }
+      if (b.sshUser && b.sshUser !== 'root') createdSshUserOverride = b.sshUser;
       params.unprivileged = 1;
     }
-    let createdAssignmentId: number | undefined;
     try {
       const res = b.type === 'qemu' ? await createQemu(cluster as never, key, b.node, params) : await createLxc(cluster as never, key, b.node, params);
       const upid = (res as { data?: string }).data || '';
       const createdVmid = vmid!;
       if (b.userId && createdVmid) {
-        const [assign] = await db.insert(schema.proxmoxVmAssignments).values({ clusterId: id, node: b.node, type: b.type, vmid: createdVmid, userId: b.userId }).returning();
+        const encKey = process.env.ENCRYPTION_KEY!;
+        const [assign] = await db.insert(schema.proxmoxVmAssignments).values({
+          clusterId: id, node: b.node, type: b.type, vmid: createdVmid, userId: b.userId,
+          sshUser: createdSshUserOverride || b.sshUser || 'root',
+          ...(createdSshPassword ? { sshPasswordEncrypted: encrypt(createdSshPassword, encKey) } : {}),
+        }).returning();
         createdAssignmentId = assign?.id;
       }
       if (pool && createdAssignmentId) {
@@ -619,7 +659,7 @@ export default function proxmoxRoutes(db: Db) {
         }
       }
       if (taskStatus === 'failed') return c.json({ errors: [{ code: 'proxmox_error', detail: taskError || 'Proxmox task failed' }] }, 502);
-      return c.json({ data: { upid, vmid: createdVmid, assignmentId: createdAssignmentId ?? null, task: taskStatus } }, taskStatus === 'running' ? 202 : 201);
+      return c.json({ data: { upid, vmid: createdVmid, assignmentId: createdAssignmentId ?? null, task: taskStatus, sshPassword: createdSshPassword ?? b.sshPassword ?? null } }, taskStatus === 'running' ? 202 : 201);
     } catch (e) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
@@ -1103,6 +1143,79 @@ export default function proxmoxRoutes(db: Db) {
       return c.json({ errors: [{ code: 'proxmox_error', detail: String(e) }] }, 502);
     }
   });
+
+  // ── SSH credentials + live IP discovery ──
+
+  app.get('/vms/:id/ssh', requireAuth, async (c) => {
+    const loaded = await loadOwnedVm(c);
+    if ('res' in loaded) return loaded.res;
+    const { a } = loaded;
+    return sshInfoResponse(db, c, a);
+  });
+  app.get('/vms/raw/:clusterId/:node/:type/:vmid/ssh', requireAuth, async (c) => {
+    const clusterId = parseInt(c.req.param('clusterId') || '0', 10);
+    const node = c.req.param('node') || '';
+    const type = (c.req.param('type') || 'qemu') as 'qemu' | 'lxc';
+    const vmid = parseInt(c.req.param('vmid') || '0', 10);
+    const u = (c as unknown as { get: (k: string) => unknown }).get('user') as { id: number; isAdmin: boolean };
+    const [existing] = await db.select().from(schema.proxmoxVmAssignments).where(and(
+      eq(schema.proxmoxVmAssignments.clusterId, clusterId),
+      eq(schema.proxmoxVmAssignments.node, node),
+      eq(schema.proxmoxVmAssignments.type, type),
+      eq(schema.proxmoxVmAssignments.vmid, vmid),
+    )).limit(1);
+    // Same policy as raw status: unassigned VMs are admin-only.
+    if (!u.isAdmin && (!existing || existing.userId !== u.id)) return c.json({ errors: [{ code: 'forbidden', detail: 'Not your VPS' }] }, 403);
+    if (!existing) return c.json({ data: { assigned: false } });
+    return sshInfoResponse(db, c, existing);
+  });
+
+  async function sshInfoResponse(db2: Db, cx: any, a: typeof schema.proxmoxVmAssignments.$inferSelect) {
+    void db2;
+    const key = process.env.ENCRYPTION_KEY!;
+    const cluster = (await db.select().from(schema.proxmoxClusters).where(eq(schema.proxmoxClusters.id, a.clusterId)).limit(1))[0];
+    if (!cluster) return cx.json({ errors: [{ code: 'not_found', detail: 'Cluster not found' }] }, 404);
+    let ip: string | null = null;
+    try {
+      if (a.type === 'lxc') {
+        const cfg = await getVmConfig(cluster as never, key, a.node, 'lxc', a.vmid);
+        for (const [k, v] of Object.entries(cfg)) {
+          if (!k.startsWith('net')) continue;
+          const m = String(v).match(/ip=(?!dhcp)([\d.]+(?:\/\d+)?)/);
+          if (m) { ip = m[1].split('/')[0]; break; }
+        }
+        if (!ip && cx.req.query('discover') === '1') {
+          const ifaces = await listContainerInterfaces(cluster as never, key, a.node, a.vmid).catch(() => []);
+          for (const i of ifaces) if (i.ip) { ip = i.ip.split('/')[0]; break; }
+        }
+      } else {
+        const agentIfaces = await getGuestAgentInterfaces(cluster as never, key, a.node, a.vmid).catch(() => []);
+        for (const iface of agentIfaces) {
+          for (const addr of iface['ip-addresses'] || []) {
+            if (addr['ip-address-type'] === 'ipv4' && !String(addr['ip-address']).startsWith('127.')) { ip = addr['ip-address']; break; }
+          }
+          if (ip) break;
+        }
+        if (!ip && cx.req.query('discover') !== '0') {
+          // Fall back to cloud-init static config on the VM.
+          const vmCfg = await getVmConfig(cluster as never, key, a.node, 'qemu', a.vmid).catch(() => ({}) as Record<string, unknown>);
+          const m = String(vmCfg.ipconfig0 || '').match(/ip=(?!dhcp)([\d.]+)/);
+          if (m) ip = m[1];
+        }
+      }
+    } catch { /* best-effort discovery */ }
+    const password = a.sshPasswordEncrypted ? decrypt(a.sshPasswordEncrypted, key) : null;
+    return cx.json({
+      data: {
+        host: ip,
+        port: a.sshPort,
+        user: a.sshUser,
+        password,
+        command: ip ? `ssh -p ${a.sshPort} ${a.sshUser}@${ip}` : null,
+      },
+    });
+  }
+
   app.get('/tasks/:node/:upid', requireAdmin, async (c) => {
     const node = c.req.param('node') || '';
     const upid = c.req.param('upid') || '';

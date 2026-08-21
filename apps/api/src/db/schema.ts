@@ -191,6 +191,9 @@ export const proxmoxVmAssignments = pgTable('proxmox_vm_assignments', {
   graceUntil: timestamp('grace_until', { withTimezone: true }),
   suspendedAt: timestamp('suspended_at', { withTimezone: true }),
   suspendedReason: varchar('suspended_reason', { length: 255 }),
+  sshUser: varchar('ssh_user', { length: 64 }).notNull().default('root'),
+  sshPort: integer('ssh_port').notNull().default(22),
+  sshPasswordEncrypted: text('ssh_password_encrypted'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pve_assign_cluster_node_vmid_idx').on(t.clusterId, t.node, t.vmid)]);
 

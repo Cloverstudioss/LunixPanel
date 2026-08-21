@@ -10,6 +10,7 @@ import PveStatsTab from './features/proxmox/StatsTab';
 import PveSnapshotsTab from './features/proxmox/SnapshotsTab';
 import PveBackupsTab from './features/proxmox/BackupsTab';
 import PveOverviewCards from './features/proxmox/OverviewCards';
+import PveSshCard from './features/proxmox/SshCard';
 import SchedulesTab from './features/servers/SchedulesTab';
 import DatabasesTab from './features/servers/DatabasesTab';
 import SftpCard from './features/servers/SftpCard';
@@ -570,6 +571,7 @@ function VpsManage() {
       {tab === 'overview' && (
         <div className="stack">
           <PveOverviewCards vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={{ ...data.status, cpus: data.status.cpus ?? cpuCores }} />
+          <PveSshCard vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} />
           {me?.isAdmin && (
             <details>
               <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>Raw status / config (debug)</summary>
@@ -580,7 +582,10 @@ function VpsManage() {
         </div>
       )}
       {tab === 'console' && (
-        <PveConsoleTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} vmType={(data.assignment.type === 'lxc' ? 'lxc' : 'qemu')} />
+        <div className="stack">
+          <PveConsoleTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} vmType={(data.assignment.type === 'lxc' ? 'lxc' : 'qemu')} />
+          {!isRaw || data.assignment.userId ? <PveSshCard vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} compact /> : null}
+        </div>
       )}
       {tab === 'stats' && (
         <PveStatsTab vps={isRaw ? { clusterId: Number(cClusterId), node: cNode, type: cType, vmid: Number(cVmid) } : { assignmentId: aid }} status={data.status} />
@@ -3133,7 +3138,7 @@ function NewVpsPage() {
   const [remoteTemplates, setRemoteTemplates] = React.useState<{ node: string; storage: string; volid: string; content: string; size: number; format?: string }[]>([]);
   const [remoteIps, setRemoteIps] = React.useState<{ node: string; iface: string; address: string; netmask: string; gateway?: string; bridge: string }[]>([]);
   const [fetching, setFetching] = React.useState<'templates' | 'ips' | null>(null);
-  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'dhcp' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: '', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '' });
+  const [f, setF] = React.useState({ node: '', type: 'qemu' as 'qemu' | 'lxc', vmid: '', hostname: '', cores: '2', sockets: '1', memory: '2048', disk: '20', storage: '', bridge: 'vmbr0', vlan: '', ipMode: 'dhcp' as 'dhcp' | 'pool' | 'custom', ipPool: '', ip: '', gateway: '', nameserver: '', searchdomain: '', templatePreset: '', iso: '', ostemplate: '', sshkeys: '', userId: '', sshUser: 'root', sshPassword: '' });
   const [adv, setAdv] = React.useState(false);
   const [err, setErr] = React.useState(''); const [saving, setSaving] = React.useState(false);
   React.useEffect(() => { fetch(`/api/proxmox/clusters/${cid}`, { credentials: 'include' }).then((r) => r.json()).then((j) => j.data && setCluster(j.data)).catch(() => {}); fetch(`/api/proxmox/clusters/${cid}/nodes`, { credentials: 'include' }).then((r) => r.json()).then((j) => { if (Array.isArray(j.data)) { setNodes(j.data); if (j.data[0]?.node) setF((p) => ({ ...p, node: j.data[0].node })); } }).catch(() => {}); fetch('/api/users', { credentials: 'include' }).then((r) => r.json()).then((j) => setUsers(j.data || [])).catch(() => {}); fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setTemplates(j.data || [])).catch(() => {}); }, [cid]);
@@ -3201,6 +3206,8 @@ function NewVpsPage() {
     if (f.templatePreset) body.templateId = parseInt(f.templatePreset, 10);
     if (f.sshkeys) body.sshkeys = f.sshkeys;
     if (f.userId) body.userId = parseInt(f.userId, 10);
+    if (f.sshUser.trim()) body.sshUser = f.sshUser.trim();
+    if (f.sshPassword.trim()) body.sshPassword = f.sshPassword.trim();
     const r = await fetch(`/api/proxmox/clusters/${cid}/vms`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     setSaving(false);
@@ -3221,6 +3228,10 @@ function NewVpsPage() {
             <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc', templatePreset: '' })}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC</option></select></label>
           </div>
           <label className="field"><span className="label">Owner (auto-assign, optional)</span><select className="input" value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}><option value="">— unassigned —</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username} · {u.email}</option>)}</select></label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <label className="field"><span className="label">SSH user <span className="mono muted" style={{ fontWeight: 400, fontSize: 11 }}>· default root</span></span><input className="input mono" value={f.sshUser} onChange={(e) => setF({ ...f, sshUser: e.target.value })} placeholder="root" /></label>
+            <label className="field"><span className="label">SSH password <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>· blank = auto-generate</span></span><input className="input mono" type="text" value={f.sshPassword} onChange={(e) => setF({ ...f, sshPassword: e.target.value })} placeholder="auto-generate" /></label>
+          </div>
         </form>
       </Card>
       <Card title="Resources">

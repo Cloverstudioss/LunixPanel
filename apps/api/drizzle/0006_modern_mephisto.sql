@@ -1,0 +1,3 @@
+DO $$ BEGIN ALTER TABLE "proxmox_vm_assignments" ADD COLUMN IF NOT EXISTS "ssh_user" varchar(64) DEFAULT 'root' NOT NULL; EXCEPTION WHEN duplicate_column THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "proxmox_vm_assignments" ADD COLUMN IF NOT EXISTS "ssh_port" integer DEFAULT 22 NOT NULL; EXCEPTION WHEN duplicate_column THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "proxmox_vm_assignments" ADD COLUMN IF NOT EXISTS "ssh_password_encrypted" text; EXCEPTION WHEN duplicate_column THEN NULL; END $$;

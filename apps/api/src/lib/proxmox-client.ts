@@ -170,3 +170,31 @@ export async function restoreQemu(cluster: ProxmoxCluster, encryptionKey: string
 export async function restoreLxc(cluster: ProxmoxCluster, encryptionKey: string, node: string, opts: { vmid: number; archive: string; storage: string }) {
   return formPost(cluster, encryptionKey, `/nodes/${node}/lxc`, { vmid: opts.vmid, archive: opts.archive, storage: opts.storage, restore: 1, force: 1 });
 }
+
+// ── IP discovery ──
+
+// QEMU (guest agent must be installed + running in the guest).
+export async function getGuestAgentInterfaces(cluster: ProxmoxCluster, encryptionKey: string, node: string, vmid: number) {
+  type Iface = { name: string; 'hardware-address'?: string; 'ip-addresses'?: { 'ip-address': string; prefix?: number; 'ip-address-type'?: string }[] };
+  return pveJson<Iface[]>(cluster, encryptionKey, `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`).catch(() => [] as Iface[]);
+}
+
+// LXC interfaces live directly on the node config.
+export async function listContainerInterfaces(cluster: ProxmoxCluster, encryptionKey: string, node: string, vmid: number) {
+  const cfg = await getVmConfig(cluster, encryptionKey, node, 'lxc', vmid);
+  const out: { name: string; hwaddr?: string; ip?: string }[] = [];
+  for (const [key, value] of Object.entries(cfg)) {
+    if (!key.startsWith('net')) continue;
+    const parts = String(value).split(',');
+    const iface: { name: string; hwaddr?: string; ip?: string } = { name: `eth${key.slice(3)}` };
+    for (const p of parts) {
+      if (p.startsWith('hwaddr=')) iface.hwaddr = p.slice(7);
+      if (p.startsWith('ip=')) {
+        const v = p.slice(3);
+        iface.ip = v === 'dhcp' ? undefined : v;
+      }
+    }
+    out.push(iface);
+  }
+  return out;
+}
