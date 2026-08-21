@@ -1352,6 +1352,7 @@ function AdminOverview() {
 }
 
 function UsersAdmin() {
+  const dialog = useConfirm();
   const [rows, setRows] = React.useState<{ id: number; username: string; email: string; status: string; isAdmin: boolean }[]>([]);
   const [open, setOpen] = React.useState(false);
   const [edit, setEdit] = React.useState<{ id: number; username: string; email: string; is_admin: boolean; status: string } | null>(null);
@@ -1379,7 +1380,7 @@ function UsersAdmin() {
     await fetch(`/api/users/${id}/${path}`, { method: 'POST', credentials: 'include' }); load();
   }
   async function del(id: number, email: string) {
-    if (!window.confirm(`Delete user ${email}? This cannot be undone.`)) return;
+    if (!await dialog.confirm({ title: 'Delete user', message: `Delete user ${email}? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
     const res = await fetch(`/api/users/${id}`, { method: 'DELETE', credentials: 'include' });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
