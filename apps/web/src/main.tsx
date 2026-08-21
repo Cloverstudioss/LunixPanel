@@ -2576,6 +2576,7 @@ function TemplatesPage() {
   const [rows, setRows] = React.useState<{ id: number; name: string; type: string; storage: string | null; iso: string | null; ostemplate: string | null; description: string | null; defaultCores: number | null; defaultMemory: number | null; defaultDisk: number | null; banner: string | null }[]>([]);
   const [err, setErr] = React.useState('');
   const [msg, setMsg] = React.useState('');
+  const [loadingPresets, setLoadingPresets] = React.useState(false);
   const load = React.useCallback(() => fetch('/api/proxmox/templates', { credentials: 'include' }).then((r) => r.json()).then((j) => setRows(j.data || [])), []);
   React.useEffect(() => { load(); }, [load]);
   async function del(t: { id: number; name: string }) {
@@ -2585,12 +2586,35 @@ function TemplatesPage() {
     if (!r.ok) { setErr(j.errors?.[0]?.detail || 'Failed'); return; }
     setMsg(`Deleted “${t.name}”.`); load();
   }
+  async function loadPresets() {
+    if (!await dialog.confirm({ title: 'Load built-in presets', message: 'Add common OS templates (Ubuntu, Debian, Windows, Alpine)? Existing templates will not be duplicated.', confirmLabel: 'Load presets' })) return;
+    setLoadingPresets(true);
+    const presets = [
+      { name: 'Ubuntu 22.04', type: 'qemu', storage: 'local-lvm', iso: 'local:iso/ubuntu-22.04-live-server-amd64.iso', defaultCores: 2, defaultMemory: 2048, defaultDisk: 20, description: 'Ubuntu 22.04 LTS Server' },
+      { name: 'Ubuntu 24.04', type: 'qemu', storage: 'local-lvm', iso: 'local:iso/ubuntu-24.04-live-server-amd64.iso', defaultCores: 2, defaultMemory: 2048, defaultDisk: 20, description: 'Ubuntu 24.04 LTS Server' },
+      { name: 'Debian 12', type: 'qemu', storage: 'local-lvm', iso: 'local:iso/debian-12.8.0-amd64-netinst.iso', defaultCores: 2, defaultMemory: 1024, defaultDisk: 20, description: 'Debian 12 Bookworm' },
+      { name: 'Windows Server 2022', type: 'qemu', storage: 'local-lvm', iso: 'local:iso/Windows_Server_2022.iso', defaultCores: 4, defaultMemory: 4096, defaultDisk: 50, description: 'Windows Server 2022 Standard' },
+      { name: 'Ubuntu 22.04 LXC', type: 'lxc', storage: 'local', ostemplate: 'local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst', defaultCores: 1, defaultMemory: 512, defaultDisk: 8, description: 'Ubuntu 22.04 LXC container' },
+      { name: 'Debian 12 LXC', type: 'lxc', storage: 'local', ostemplate: 'local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst', defaultCores: 1, defaultMemory: 512, defaultDisk: 8, description: 'Debian 12 LXC container' },
+      { name: 'Alpine 3.19 LXC', type: 'lxc', storage: 'local', ostemplate: 'local:vztmpl/alpine-3.19-default_20231219_amd64.tar.xz', defaultCores: 1, defaultMemory: 256, defaultDisk: 2, description: 'Alpine Linux 3.19 LXC container' },
+    ];
+    let created = 0;
+    for (const p of presets) {
+      const exists = rows.find((r) => r.name === p.name);
+      if (exists) continue;
+      const r = await fetch('/api/proxmox/templates', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      if (r.ok) created++;
+    }
+    setLoadingPresets(false);
+    setMsg(`Loaded ${created} preset template(s).`);
+    load();
+  }
   return (
     <div className="page">
-      <div className="page-head"><div><h1 className="h1">OS templates</h1><p className="lede">Reusable presets like your Eggs — prefill ISO, OSTemplate, storage + default resources. The New VM page can use one to auto-fill your form.</p></div><NavLink to="/admin/proxmox/templates/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New template</NavLink></div>
+      <div className="page-head"><div><h1 className="h1">OS templates</h1><p className="lede">Reusable presets — prefill ISO, OSTemplate, storage + default resources when creating a VM.</p></div><div style={{ display: 'flex', gap: 8 }}><button className="btn btn-ghost btn-sm" onClick={loadPresets} disabled={loadingPresets}>{loadingPresets ? 'Loading…' : 'Load built-in presets'}</button><NavLink to="/admin/proxmox/templates/new" className="btn btn-primary btn-sm"><FiPlus size={13} /> New template</NavLink></div></div>
       {msg && <div className="alert" style={{ borderColor: '#1a2e1a', background: '#0f1a12', color: '#bbf7d0' }}>{msg}</div>}
       {err && <div className="alert alert-error" role="alert">{err}</div>}
-      <div className="table-wrap"><table className="table"><thead><tr><th>Template</th><th>Type</th><th>Image / storage</th><th>Defaults</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={5} className="muted">No templates yet — create one.</td></tr> : rows.map((t) => <tr key={t.id}>
+      <div className="table-wrap"><table className="table"><thead><tr><th>Template</th><th>Type</th><th>Image / storage</th><th>Defaults</th><th></th></tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={5} className="muted">No templates yet — click "Load built-in presets" or create one.</td></tr> : rows.map((t) => <tr key={t.id}>
             <td>{t.name}{t.description ? <div className="muted" style={{ fontSize: 12 }}>{t.description}</div> : null}</td>
             <td className="mono muted">{t.type === 'qemu' ? 'QEMU' : 'LXC'}</td>
             <td className="mono" style={{ fontSize: 12, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.type === 'qemu' ? t.iso : t.ostemplate}</td>
@@ -2900,31 +2924,15 @@ function NewVpsPage() {
       </Card>
       <Card title="OS / template">
         <label className="field"><span className="label">Type</span><select className="input" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as 'qemu' | 'lxc', templatePreset: '' })} style={{ maxWidth: 200, marginBottom: 10 }}><option value="qemu">QEMU (VM)</option><option value="lxc">LXC (Container)</option></select></label>
-        {templates.length > 0 && (
-          <label className="field"><span className="label">Saved template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">— none —</option>{templates.filter((t) => t.type === f.type).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.type === 'qemu' ? 'QEMU' : 'LXC'})</option>)}</select></label>
-        )}
-        <div style={{ marginBottom: 10 }}>
-          <span className="label" style={{ marginBottom: 6, display: 'block' }}>Quick presets</span>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {[
-              { label: 'Ubuntu 22.04', type: 'qemu' as const, cores: '2', memory: '2048', disk: '20' },
-              { label: 'Ubuntu 24.04', type: 'qemu' as const, cores: '2', memory: '2048', disk: '20' },
-              { label: 'Debian 12', type: 'qemu' as const, cores: '2', memory: '1024', disk: '20' },
-              { label: 'Windows Server', type: 'qemu' as const, cores: '4', memory: '4096', disk: '50' },
-              { label: 'Ubuntu 22.04 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
-              { label: 'Debian 12 LXC', type: 'lxc' as const, cores: '1', memory: '512', disk: '8' },
-              { label: 'Alpine LXC', type: 'lxc' as const, cores: '1', memory: '256', disk: '2' },
-            ].map((p) => <button key={p.label} type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setF((prev) => ({ ...prev, type: p.type, cores: p.cores, memory: p.memory, disk: p.disk, templatePreset: '' }))}>{p.label}</button>)}
-          </div>
-        </div>
+        <label className="field"><span className="label">Template preset</span><select className="input" value={f.templatePreset} onChange={(e) => setF({ ...f, templatePreset: e.target.value })}><option value="">Choose a template…</option>{templates.filter((t) => t.type === f.type).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}{templates.filter((t) => t.type === f.type).length === 0 && <option value="" disabled>No templates loaded — go to Admin → OS Templates → Load built-in presets</option>}</select></label>
         {f.type === 'qemu' ? (
-          <label className="field"><span className="label">ISO path (storage:iso/file.iso)</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
+          <label className="field"><span className="label">ISO path</span><input className="input mono" value={f.iso} onChange={(e) => setF({ ...f, iso: e.target.value })} placeholder="local:iso/ubuntu-22.04.iso" /></label>
         ) : (
           <label className="field"><span className="label">OS template path (LXC)</span><input className="input mono" value={f.ostemplate} onChange={(e) => setF({ ...f, ostemplate: e.target.value })} placeholder="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst" /></label>
         )}
         <div style={{ marginBottom: 10 }}>
           <button type="button" className="btn btn-ghost btn-sm" disabled={fetching === 'templates'} onClick={fetchRemoteTemplates}>
-            {fetching === 'templates' ? 'Scanning…' : 'Fetch from Proxmox storage'}
+            {fetching === 'templates' ? 'Scanning…' : 'Fetch ISOs / templates from Proxmox storage'}
           </button>
           {remoteTemplates.length > 0 && (
             <div className="table-wrap" style={{ marginTop: 8 }}>
